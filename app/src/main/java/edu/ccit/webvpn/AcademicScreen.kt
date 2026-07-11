@@ -1,6 +1,15 @@
 package edu.ccit.webvpn
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -79,9 +88,21 @@ fun AcademicSection(
                 }
             }
 
-            when {
-                state.initializing -> AcademicLoading("正在恢复教务系统登录…")
-                !state.loggedIn -> AcademicLoginForm(
+            AnimatedContent(
+                targetState = when {
+                    state.initializing -> 0
+                    !state.loggedIn -> 1
+                    else -> 2
+                },
+                transitionSpec = {
+                    (fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 10 }) togetherWith
+                        fadeOut(tween(140))
+                },
+                label = "academic login state",
+            ) { loginState ->
+                when (loginState) {
+                0 -> AcademicLoading("正在恢复教务系统登录…")
+                1 -> AcademicLoginForm(
                     state,
                     onRefreshCaptcha,
                     onLogin,
@@ -95,6 +116,7 @@ fun AcademicSection(
                     onBestOnlyChanged = onBestOnlyChanged,
                     onQueryGrades = onQueryGrades,
                 )
+                }
             }
         }
     }
@@ -220,7 +242,15 @@ private fun AcademicLoginForm(
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
         colors = webVpnTextFieldColors(),
     )
-    if (usingSavedPassword) {
+    AnimatedContent(
+        targetState = usingSavedPassword,
+        modifier = Modifier.animateContentSize(spring(stiffness = 600f)),
+        transitionSpec = {
+            (fadeIn(tween(200)) + slideInVertically(tween(240)) { it / 8 }) togetherWith fadeOut(tween(130))
+        },
+        label = "academic credentials",
+    ) { savedPassword ->
+    if (savedPassword) {
         WebVpnCard(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(14.dp),
@@ -238,6 +268,7 @@ private fun AcademicLoginForm(
             }
         }
     } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
@@ -263,6 +294,8 @@ private fun AcademicLoginForm(
             )
             Text("在本机加密保存此教务账号和密码")
         }
+        }
+    }
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -295,16 +328,20 @@ private fun AcademicLoginForm(
             state.captcha != null &&
             captchaCode.isNotBlank(),
     ) {
-        if (state.submitting) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                strokeWidth = 2.dp,
-                color = WebVpnColors.Surface,
-            )
-        } else {
-            Icon(Icons.Default.School, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("登录学生端")
+        Crossfade(targetState = state.submitting, animationSpec = tween(160), label = "academic submit") { submitting ->
+            if (submitting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = WebVpnColors.Surface,
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.School, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("登录学生端")
+                }
+            }
         }
     }
 }
@@ -371,10 +408,24 @@ private fun AcademicCaptcha(bytes: ByteArray?, loading: Boolean) {
     }
     WebVpnCard(modifier = Modifier.size(width = 112.dp, height = 50.dp)) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().height(50.dp)) {
-            when {
-                loading -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                bitmap == null -> Text("点击刷新", color = WebVpnColors.InkMuted)
-                else -> Image(bitmap = bitmap, contentDescription = "教务系统图形验证码")
+            Crossfade(
+                targetState = when {
+                    loading -> 0
+                    bitmap == null -> 1
+                    else -> 2
+                },
+                animationSpec = tween(180),
+                label = "academic captcha",
+            ) { captchaState ->
+                Box(Modifier.fillMaxWidth().height(50.dp), contentAlignment = Alignment.Center) {
+                    when (captchaState) {
+                        0 -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        1 -> Text("点击刷新", color = WebVpnColors.InkMuted)
+                        else -> bitmap?.let {
+                            Image(bitmap = it, contentDescription = "教务系统图形验证码")
+                        }
+                    }
+                }
             }
         }
     }

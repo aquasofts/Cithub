@@ -5,10 +5,20 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -47,6 +57,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -70,6 +81,7 @@ import edu.ccit.webvpn.core.ui.WebVpnColors
 import edu.ccit.webvpn.core.webvpn.LoginResult
 import edu.ccit.webvpn.core.webvpn.RequiredAccountAction
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private enum class MainTab(val label: String) {
@@ -133,7 +145,16 @@ fun AuthenticatedApp(
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            when (selectedTab) {
+            AnimatedContent(
+                targetState = selectedTab,
+                transitionSpec = {
+                    val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                    (fadeIn(tween(220)) + slideInHorizontally(tween(280)) { direction * it / 10 }) togetherWith
+                        (fadeOut(tween(150)) + slideOutHorizontally(tween(220)) { -direction * it / 14 })
+                },
+                label = "main tab",
+            ) { tab ->
+            when (tab) {
                 MainTab.Favorites -> FavoritesScreen(
                     features = featureOrder.filter { it.id in favorites },
                     favorites = favorites.toSet(),
@@ -182,6 +203,7 @@ fun AuthenticatedApp(
                     },
                 )
             }
+            }
         }
         NavigationBar(containerColor = WebVpnColors.Surface) {
             MainTab.entries.forEach { tab ->
@@ -193,6 +215,11 @@ fun AuthenticatedApp(
                         arranging = false
                     },
                     icon = {
+                        val iconScale by animateFloatAsState(
+                            targetValue = if (selectedTab == tab) 1.12f else 1f,
+                            animationSpec = spring(dampingRatio = 0.72f, stiffness = 520f),
+                            label = "${tab.label} icon",
+                        )
                         Icon(
                             when (tab) {
                                 MainTab.Favorites -> Icons.Default.Favorite
@@ -200,6 +227,7 @@ fun AuthenticatedApp(
                                 MainTab.Mine -> Icons.Default.AccountCircle
                             },
                             contentDescription = tab.label,
+                            modifier = Modifier.graphicsLayer { scaleX = iconScale; scaleY = iconScale },
                         )
                     },
                     label = { Text(tab.label) },
@@ -275,7 +303,20 @@ private fun AcademicHomeScreen(
                 )
             }
         }
-        openedFeature == null -> FeatureListScreen(
+        else -> AnimatedContent(
+            targetState = openedFeature,
+            transitionSpec = {
+                if (targetState != null) {
+                    (fadeIn(tween(220)) + slideInHorizontally(tween(300)) { it / 7 }) togetherWith
+                        (fadeOut(tween(150)) + slideOutHorizontally(tween(220)) { -it / 12 })
+                } else {
+                    (fadeIn(tween(220)) + slideInHorizontally(tween(280)) { -it / 10 }) togetherWith
+                        (fadeOut(tween(150)) + slideOutHorizontally(tween(220)) { it / 8 })
+                }
+            },
+            label = "academic feature",
+        ) { feature -> when {
+        feature == null -> FeatureListScreen(
             title = "教务系统",
             subtitle = "${featureOrder.size} 项学生服务",
             features = featureOrder,
@@ -286,8 +327,8 @@ private fun AcademicHomeScreen(
             onToggleFavorite = onToggleFavorite,
             onMove = onMove,
         )
-        openedFeature == AcademicFeature.Grades -> FeaturePageHeader(
-            openedFeature.title,
+        feature == AcademicFeature.Grades -> FeaturePageHeader(
+            feature.title,
             onBack,
             predictiveBackProgress,
         ) {
@@ -300,8 +341,8 @@ private fun AcademicHomeScreen(
                 }
             }
         }
-        openedFeature == AcademicFeature.Timetable -> FeaturePageHeader(
-            openedFeature.title,
+        feature == AcademicFeature.Timetable -> FeaturePageHeader(
+            feature.title,
             onBack,
             predictiveBackProgress,
         ) {
@@ -311,9 +352,10 @@ private fun AcademicHomeScreen(
                 onLoad = onQueryTimetable,
             )
         }
-        else -> FeaturePageHeader(openedFeature.title, onBack, predictiveBackProgress) {
-            AcademicWebPage(openedFeature, state.webViewCookies)
+        else -> FeaturePageHeader(feature.title, onBack, predictiveBackProgress) {
+            AcademicWebPage(feature, state.webViewCookies)
         }
+        } }
     }
 }
 
@@ -355,17 +397,28 @@ private fun FeatureListScreen(
             }
         }
         items(features, key = { it.id }) { feature ->
-            FeatureRow(
+            val index = features.indexOf(feature)
+            var visible by remember(feature.id) { mutableStateOf(false) }
+            LaunchedEffect(feature.id) {
+                delay((index.coerceAtMost(6) * 28L))
+                visible = true
+            }
+            AnimatedVisibility(
+                visible = visible,
                 modifier = Modifier.animateItem(placementSpec = tween(durationMillis = 260)),
+                enter = fadeIn(tween(220)) + slideInVertically(tween(280)) { it / 5 },
+            ) {
+            FeatureRow(
                 feature = feature,
                 favorite = feature.id in favorites,
                 arranging = arranging,
-                index = features.indexOf(feature),
+                index = index,
                 itemCount = features.size,
                 onOpen = { onOpen(feature) },
                 onToggleFavorite = { onToggleFavorite(feature) },
                 onMove = onMove,
             )
+            }
         }
         if (features.isEmpty()) item { EmptyFavoritesCard() }
         item { Spacer(Modifier.height(8.dp)) }
@@ -441,7 +494,11 @@ private fun FeatureRow(
                     Text(feature.title, style = MaterialTheme.typography.titleMedium)
                     Text(feature.description, color = WebVpnColors.InkMuted)
                 }
-                if (favorite && !arranging) {
+                AnimatedVisibility(
+                    visible = favorite && !arranging,
+                    enter = fadeIn(tween(160)) + scaleIn(spring(stiffness = 600f), initialScale = 0.65f),
+                    exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.7f),
+                ) {
                     Icon(Icons.Default.Favorite, contentDescription = "已收藏", tint = WebVpnColors.Brown)
                 }
                 if (arranging) {

@@ -5,6 +5,18 @@ import android.os.Bundle
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -74,6 +86,7 @@ import edu.ccit.webvpn.core.webvpn.WebVpnAuthRepository
 import edu.ccit.webvpn.core.webvpn.WebVpnCookieJar
 import edu.ccit.webvpn.core.webvpn.WebVpnNetwork
 import edu.ccit.webvpn.core.webvpn.WebVpnSessionManager
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,6 +117,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+private enum class AppScene { Loading, Login, Authenticated }
 
 @Composable
 private fun WebVpnApp(
@@ -168,9 +183,22 @@ private fun WebVpnApp(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentAlignment = Alignment.Center,
         ) {
-            when {
-                state.initializing -> LoadingScreen("正在验证登录状态…")
-                state.loginResult != null -> AuthenticatedApp(
+            val scene = when {
+                state.initializing -> AppScene.Loading
+                state.loginResult != null -> AppScene.Authenticated
+                else -> AppScene.Login
+            }
+            AnimatedContent(
+                targetState = scene,
+                transitionSpec = {
+                    (fadeIn(tween(240)) + scaleIn(tween(280), initialScale = 0.985f)) togetherWith
+                        (fadeOut(tween(160)) + scaleOut(tween(180), targetScale = 1.01f))
+                },
+                label = "app scene",
+            ) { targetScene ->
+                when (targetScene) {
+                AppScene.Loading -> LoadingScreen("正在验证登录状态…")
+                AppScene.Authenticated -> AuthenticatedApp(
                     result = state.loginResult!!,
                     loggingOut = state.submitting,
                     checkingSession = state.checkingSession,
@@ -187,7 +215,7 @@ private fun WebVpnApp(
                     onAcademicLogout = academicViewModel::logout,
                     onLogout = viewModel::logout,
                 )
-                else -> LoginScreen(
+                AppScene.Login -> LoginScreen(
                     state = state,
                     onRefreshCaptcha = viewModel::refreshCaptcha,
                     onLogin = viewModel::login,
@@ -195,6 +223,7 @@ private fun WebVpnApp(
                     onForgetSavedAccount = viewModel::forgetSavedAccount,
                     onUseManualCredentials = viewModel::useManualCredentials,
                 )
+                }
             }
         }
     }
@@ -215,6 +244,12 @@ private fun LoginScreen(
     var captchaCode by remember(state.captcha?.id) { mutableStateOf("") }
     val configuration = state.configuration
     val usingSavedPassword = state.selectedSavedUsername != null
+    var contentVisible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        delay(40)
+        contentVisible = true
+    }
 
     LaunchedEffect(state.selectedSavedUsername) {
         state.selectedSavedUsername?.let { selected ->
@@ -224,6 +259,10 @@ private fun LoginScreen(
         }
     }
 
+    AnimatedVisibility(
+        visible = contentVisible,
+        enter = fadeIn(tween(320)) + slideInVertically(tween(360)) { it / 18 },
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -290,7 +329,16 @@ private fun LoginScreen(
                     colors = webVpnTextFieldColors(),
                 )
 
-                if (usingSavedPassword) {
+                AnimatedContent(
+                    targetState = usingSavedPassword,
+                    modifier = Modifier.animateContentSize(spring(stiffness = 600f)),
+                    transitionSpec = {
+                        (fadeIn(tween(200)) + slideInVertically(tween(240)) { it / 8 }) togetherWith
+                            fadeOut(tween(130))
+                    },
+                    label = "saved credentials",
+                ) { savedPassword ->
+                if (savedPassword) {
                     WebVpnCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(14.dp),
@@ -315,6 +363,7 @@ private fun LoginScreen(
                         }
                     }
                 } else if (configuration?.requiresPassword != false) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
@@ -340,6 +389,8 @@ private fun LoginScreen(
                         )
                         Text("在本机加密保存此账号和密码")
                     }
+                    }
+                }
                 }
 
                 if (configuration?.requiresGraphCaptcha == true) {
@@ -379,21 +430,26 @@ private fun LoginScreen(
                         (!configuration.requiresGraphCaptcha ||
                             (state.captcha != null && captchaCode.isNotBlank())),
                 ) {
-                    if (state.submitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = WebVpnColors.Surface,
-                        )
-                    } else {
-                        Icon(Icons.Default.Lock, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (configuration == null) "正在加载配置…" else "登录")
+                    Crossfade(targetState = state.submitting, animationSpec = tween(160), label = "webvpn submit") { submitting ->
+                        if (submitting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = WebVpnColors.Surface,
+                            )
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Lock, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(if (configuration == null) "正在加载配置…" else "登录")
+                            }
+                        }
                     }
                 }
             }
         }
 
+    }
     }
 }
 
@@ -412,10 +468,24 @@ private fun CaptchaImage(captcha: CaptchaData?, loading: Boolean) {
 
     WebVpnCard(modifier = Modifier.size(width = 112.dp, height = 50.dp)) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            when {
-                loading -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                imageBitmap == null -> Text("点击刷新", color = WebVpnColors.InkMuted)
-                else -> Image(bitmap = imageBitmap, contentDescription = "图形验证码")
+            Crossfade(
+                targetState = when {
+                    loading -> 0
+                    imageBitmap == null -> 1
+                    else -> 2
+                },
+                animationSpec = tween(180),
+                label = "captcha",
+            ) { captchaState ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    when (captchaState) {
+                        0 -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        1 -> Text("点击刷新", color = WebVpnColors.InkMuted)
+                        else -> imageBitmap?.let {
+                            Image(bitmap = it, contentDescription = "图形验证码")
+                        }
+                    }
+                }
             }
         }
     }

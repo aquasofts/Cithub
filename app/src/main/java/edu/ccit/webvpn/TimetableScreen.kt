@@ -1,7 +1,15 @@
 package edu.ccit.webvpn
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,10 +71,20 @@ fun TimetableScreen(
         if (timetable == null && !loading) onLoad(null)
     }
 
-    when {
-        timetable == null && loading -> CenteredTimetableLoading()
-        timetable == null -> EmptyTimetable(onLoad)
-        else -> TimetableContent(timetable, loading, onLoad)
+    AnimatedContent(
+        targetState = when {
+            timetable == null && loading -> 0
+            timetable == null -> 1
+            else -> 2
+        },
+        transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(140)) },
+        label = "timetable state",
+    ) { timetableState ->
+        when (timetableState) {
+            0 -> CenteredTimetableLoading()
+            1 -> EmptyTimetable(onLoad)
+            else -> timetable?.let { TimetableContent(it, loading, onLoad) }
+        }
     }
 }
 
@@ -108,13 +126,22 @@ private fun TimetableContent(
             onRefresh = { onLoad(timetable.selectedTerm) },
         )
         Spacer(Modifier.height(14.dp))
-        SingleDayTimetable(
-            timetable = timetable,
-            selectedWeek = selectedWeek,
-            selectedDay = selectedDay,
-            selectedDate = selectedDate,
-            onCourseClick = { selectedCourse = it },
-        )
+        AnimatedContent(
+            targetState = selectedWeek to selectedDay,
+            transitionSpec = {
+                (fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 12 }) togetherWith
+                    (fadeOut(tween(140)) + slideOutVertically(tween(180)) { -it / 16 })
+            },
+            label = "selected timetable day",
+        ) { (week, day) ->
+            SingleDayTimetable(
+                timetable = timetable,
+                selectedWeek = week,
+                selectedDay = day,
+                selectedDate = timetable.dateFor(week, day),
+                onCourseClick = { selectedCourse = it },
+            )
+        }
         if (timetable.note.isNotBlank()) {
             Surface(
                 modifier = Modifier
@@ -186,10 +213,12 @@ private fun TimetableControls(
             }
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = onRefresh, enabled = !loading) {
-                if (loading) {
-                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Default.Refresh, contentDescription = "刷新课表")
+                Crossfade(targetState = loading, animationSpec = tween(160), label = "refresh timetable") { refreshing ->
+                    if (refreshing) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = "刷新课表")
+                    }
                 }
             }
         }
