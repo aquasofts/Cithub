@@ -195,6 +195,7 @@ private fun AcademicLoginForm(
     var password by remember { mutableStateOf("") }
     var rememberPassword by remember { mutableStateOf(false) }
     var captchaCode by remember(state.captcha) { mutableStateOf("") }
+    var captchaEdited by remember(state.captcha) { mutableStateOf(false) }
     val usingSavedPassword = state.selectedSavedUsername != null
 
     LaunchedEffect(state.defaultUsername, state.selectedSavedUsername) {
@@ -205,12 +206,18 @@ private fun AcademicLoginForm(
         }
     }
 
+    LaunchedEffect(state.captcha, state.recognizedCaptchaCode) {
+        if (!captchaEdited && state.recognizedCaptchaCode.isNotBlank()) {
+            captchaCode = state.recognizedCaptchaCode
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
     Text(
-        "WebVPN 已连接，请继续登录学生端。学生端有独立验证码。",
+        "WebVPN 已连接，请登录学生端。",
         color = WebVpnColors.InkMuted,
     )
     if (state.savedAccounts.isNotEmpty()) {
@@ -262,7 +269,14 @@ private fun AcademicLoginForm(
                     Spacer(Modifier.width(8.dp))
                     Text("已使用本机加密保存的教务密码")
                 }
-                Text("只需填写本次验证码即可登录。", color = WebVpnColors.InkMuted)
+                Text(
+                    if (state.captchaAutofillEnabled) {
+                        "验证码将自动填写。"
+                    } else {
+                        "请填写本次验证码。"
+                    },
+                    color = WebVpnColors.InkMuted,
+                )
                 OutlinedButton(onClick = onUseManualCredentials, modifier = Modifier.fillMaxWidth()) {
                     Text("重新输入教务账号密码")
                 }
@@ -306,7 +320,10 @@ private fun AcademicLoginForm(
     ) {
         OutlinedTextField(
             value = captchaCode,
-            onValueChange = { captchaCode = it.trim() },
+            onValueChange = {
+                captchaEdited = true
+                captchaCode = it.trim()
+            },
             modifier = Modifier.weight(1f).widthIn(min = 0.dp),
             label = { Text("验证码") },
             singleLine = true,
@@ -317,8 +334,14 @@ private fun AcademicLoginForm(
             colors = webVpnTextFieldColors(),
         )
         Spacer(Modifier.width(10.dp))
-        AcademicCaptcha(state.captcha, state.loadingCaptcha)
-        IconButton(onClick = onRefreshCaptcha, enabled = !state.loadingCaptcha) {
+        AcademicCaptcha(
+            state.captcha,
+            state.loadingCaptcha || state.recognizingCaptcha,
+        )
+        IconButton(
+            onClick = onRefreshCaptcha,
+            enabled = !state.loadingCaptcha && !state.recognizingCaptcha,
+        ) {
             Icon(Icons.Default.Refresh, contentDescription = "刷新教务验证码")
         }
     }

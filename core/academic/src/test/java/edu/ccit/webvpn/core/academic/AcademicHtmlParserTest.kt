@@ -42,6 +42,63 @@ class AcademicHtmlParserTest {
     }
 
     @Test
+    fun parseSelectedCourses_mapsObservedEightColumns() {
+        val html = """
+            <table>
+              <tr><th>序号</th><th>课程名称</th><th>课程编号</th><th>上课老师</th><th>总学时</th><th>学分</th><th>课程属性</th><th>课程性质</th></tr>
+              <tr><td>1</td><td>大学物理</td><td>PHY-1</td><td>张老师</td><td>48</td><td>3</td><td>必修</td><td>公共基础课</td></tr>
+            </table>
+        """.trimIndent()
+
+        val course = AcademicHtmlParser.parseSelectedCourses(html).single()
+
+        assertEquals("大学物理", course.courseName)
+        assertEquals("张老师", course.teacher)
+        assertEquals("3", course.credit)
+    }
+
+    @Test
+    fun parseEvaluationPages_mapsBatchCourseAndDynamicForm() {
+        val batchHtml = """
+            <table><tr><th>序号</th><th>学年学期</th><th>评价分类</th><th>评价批次</th><th>开始时间</th><th>结束时间</th><th>操作</th></tr>
+            <tr><td>1</td><td>2025-2026-2</td><td>学生评价</td><td>期末评教</td><td>2026-06-01</td><td>2026-09-01</td><td><a href='/jsxsd/xspj/xspj_list.do?id=1&amp;x=2'>进入评价</a></td></tr></table>
+        """.trimIndent()
+        val courseHtml = """
+            <table id='dataList'><tr>${(1..19).joinToString("") { "<th>列$it</th>" }}</tr>
+            <tr><td>1</td><td>C-1</td><td>课程</td><td>教师</td><td>理论</td><td>96</td><td>是</td><td>否</td><td>32</td>${(10..18).joinToString("") { "<td></td>" }}<td><a href='/jsxsd/xspj/xspj_edit.do?id=1'>评价</a></td></tr></table>
+        """.trimIndent()
+        val formHtml = """
+            课程名称：课程&nbsp;&nbsp;评教大类：理论<br>
+            <form action='/jsxsd/xspj/xspj_save.do'>
+              <input type='hidden' name='issubmit' value='0'>
+              <input type='hidden' name='isxtjg' value='1'>
+              <table><tr><td>教学认真<input type='hidden' name='pj06xh' value='8'></td><td>
+                <input type='radio' name='pj0601id_8' value='good' checked>优
+                <input type='hidden' name='pj0601fz_8_good' value='10'>
+                <input type='radio' name='pj0601id_8' value='normal'>中
+                <input type='hidden' name='pj0601fz_8_normal' value='8'>
+              </td></tr></table>
+              <textarea name='jynr'>继续保持</textarea>
+              <input type='button' onclick='saveData(this, 1)' value='提交'>
+            </form>
+        """.trimIndent()
+
+        val batch = AcademicHtmlParser.parseEvaluationBatches(batchHtml).single()
+        val course = AcademicHtmlParser.parseEvaluationCourses(courseHtml).single()
+        val form = requireNotNull(AcademicHtmlParser.parseEvaluationForm(formHtml))
+
+        assertEquals("/jsxsd/xspj/xspj_list.do?id=1&x=2", batch.courseListPath)
+        assertFalse(course.submitted)
+        assertEquals("/jsxsd/xspj/xspj_edit.do?id=1", course.formPath)
+        assertEquals("课程", form.courseName)
+        assertEquals("8", form.questions.single().id)
+        assertEquals("优", form.questions.single().options.first().label)
+        assertEquals("10", form.questions.single().options.first().score)
+        assertEquals("继续保持", form.suggestion)
+        assertFalse(form.readOnly)
+    }
+
+    @Test
     fun encodeCredentials_matchesObservedBase64SeparatorFormat() {
         val encoded = AcademicRepository.encodeCredentials("student", "password")
         val parts = encoded.split("%%%")

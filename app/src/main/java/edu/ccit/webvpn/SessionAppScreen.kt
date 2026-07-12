@@ -83,6 +83,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import edu.ccit.webvpn.core.ui.WebVpnCard
 import edu.ccit.webvpn.core.ui.WebVpnColors
+import edu.ccit.webvpn.core.academic.EvaluationAnswer
 import edu.ccit.webvpn.core.webvpn.LoginResult
 import edu.ccit.webvpn.core.webvpn.RequiredAccountAction
 import kotlin.math.roundToInt
@@ -115,6 +116,14 @@ fun AuthenticatedApp(
     onBestOnlyChanged: (Boolean) -> Unit,
     onQueryGrades: () -> Unit,
     onQueryTimetable: (String?) -> Unit,
+    onSelectCourseSelectionTerm: (String) -> Unit,
+    onQueryCourseSelection: () -> Unit,
+    onLoadEvaluationBatches: () -> Unit,
+    onOpenEvaluationBatch: (String) -> Unit,
+    onCloseEvaluationBatch: () -> Unit,
+    onOpenEvaluationCourse: (String) -> Unit,
+    onCloseEvaluationForm: () -> Unit,
+    onSaveEvaluation: (List<EvaluationAnswer>, String, Boolean) -> Unit,
     onAcademicLogout: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -203,6 +212,14 @@ fun AuthenticatedApp(
                     onBestOnlyChanged = onBestOnlyChanged,
                     onQueryGrades = onQueryGrades,
                     onQueryTimetable = onQueryTimetable,
+                    onSelectCourseSelectionTerm = onSelectCourseSelectionTerm,
+                    onQueryCourseSelection = onQueryCourseSelection,
+                    onLoadEvaluationBatches = onLoadEvaluationBatches,
+                    onOpenEvaluationBatch = onOpenEvaluationBatch,
+                    onCloseEvaluationBatch = onCloseEvaluationBatch,
+                    onOpenEvaluationCourse = onOpenEvaluationCourse,
+                    onCloseEvaluationForm = onCloseEvaluationForm,
+                    onSaveEvaluation = onSaveEvaluation,
                 )
                 MainTab.Mine -> MineScreen(
                     result = result,
@@ -287,6 +304,14 @@ private fun AcademicHomeScreen(
     onBestOnlyChanged: (Boolean) -> Unit,
     onQueryGrades: () -> Unit,
     onQueryTimetable: (String?) -> Unit,
+    onSelectCourseSelectionTerm: (String) -> Unit,
+    onQueryCourseSelection: () -> Unit,
+    onLoadEvaluationBatches: () -> Unit,
+    onOpenEvaluationBatch: (String) -> Unit,
+    onCloseEvaluationBatch: () -> Unit,
+    onOpenEvaluationCourse: (String) -> Unit,
+    onCloseEvaluationForm: () -> Unit,
+    onSaveEvaluation: (List<EvaluationAnswer>, String, Boolean) -> Unit,
 ) {
     when {
         state.initializing -> CenteredLoading("正在连接教务系统…")
@@ -383,6 +408,30 @@ private fun AcademicHomeScreen(
                                 timetable = state.timetable,
                                 loading = state.loadingTimetable,
                                 onLoad = onQueryTimetable,
+                            )
+                        }
+                        AcademicFeature.SelectionResults -> FeaturePageHeader(
+                            feature.title,
+                            navController::popBackStack,
+                        ) {
+                            CourseSelectionResultsScreen(
+                                state = state,
+                                onSelectTerm = onSelectCourseSelectionTerm,
+                                onQuery = onQueryCourseSelection,
+                            )
+                        }
+                        AcademicFeature.Evaluation -> FeaturePageHeader(
+                            feature.title,
+                            navController::popBackStack,
+                        ) {
+                            StudentEvaluationScreen(
+                                state = state,
+                                onLoadBatches = onLoadEvaluationBatches,
+                                onOpenBatch = onOpenEvaluationBatch,
+                                onCloseBatch = onCloseEvaluationBatch,
+                                onOpenCourse = onOpenEvaluationCourse,
+                                onCloseForm = onCloseEvaluationForm,
+                                onSave = onSaveEvaluation,
                             )
                         }
                         else -> FeaturePageHeader(

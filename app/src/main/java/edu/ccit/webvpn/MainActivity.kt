@@ -107,10 +107,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             WebVpnTheme {
                 val webVpnViewModel: WebVpnViewModel = viewModel(
-                    factory = WebVpnViewModel.Factory(repository, sessionManager),
+                    factory = WebVpnViewModel.Factory(repository, sessionManager, applicationContext),
                 )
                 val academicViewModel: AcademicViewModel = viewModel(
-                    factory = AcademicViewModel.Factory(academicRepository, sessionManager),
+                    factory = AcademicViewModel.Factory(
+                        academicRepository,
+                        sessionManager,
+                        applicationContext,
+                    ),
                 )
                 WebVpnApp(webVpnViewModel, academicViewModel)
             }
@@ -212,6 +216,14 @@ private fun WebVpnApp(
                     onBestOnlyChanged = academicViewModel::setBestOnly,
                     onQueryGrades = academicViewModel::queryGrades,
                     onQueryTimetable = academicViewModel::queryTimetable,
+                    onSelectCourseSelectionTerm = academicViewModel::selectCourseSelectionTerm,
+                    onQueryCourseSelection = academicViewModel::queryCourseSelection,
+                    onLoadEvaluationBatches = academicViewModel::loadEvaluationBatches,
+                    onOpenEvaluationBatch = academicViewModel::openEvaluationBatch,
+                    onCloseEvaluationBatch = academicViewModel::closeEvaluationBatch,
+                    onOpenEvaluationCourse = academicViewModel::openEvaluationCourse,
+                    onCloseEvaluationForm = academicViewModel::closeEvaluationForm,
+                    onSaveEvaluation = academicViewModel::saveEvaluation,
                     onAcademicLogout = academicViewModel::logout,
                     onLogout = viewModel::logout,
                 )
@@ -242,6 +254,7 @@ private fun LoginScreen(
     var password by remember { mutableStateOf("") }
     var rememberPassword by remember { mutableStateOf(false) }
     var captchaCode by remember(state.captcha?.id) { mutableStateOf("") }
+    var captchaEdited by remember(state.captcha?.id) { mutableStateOf(false) }
     val configuration = state.configuration
     val usingSavedPassword = state.selectedSavedUsername != null
     var contentVisible by remember { mutableStateOf(false) }
@@ -256,6 +269,12 @@ private fun LoginScreen(
             username = selected
             password = ""
             rememberPassword = false
+        }
+    }
+
+    LaunchedEffect(state.captcha?.id, state.recognizedCaptchaCode) {
+        if (!captchaEdited && state.recognizedCaptchaCode.isNotBlank()) {
+            captchaCode = state.recognizedCaptchaCode
         }
     }
 
@@ -353,7 +372,14 @@ private fun LoginScreen(
                                 Spacer(Modifier.width(8.dp))
                                 Text("已使用本机加密保存的密码")
                             }
-                            Text("只需填写本次验证码即可登录。", color = WebVpnColors.InkMuted)
+                            Text(
+                                if (state.captchaAutofillEnabled) {
+                                    "验证码将自动填写。"
+                                } else {
+                                    "请填写本次验证码。"
+                                },
+                                color = WebVpnColors.InkMuted,
+                            )
                             OutlinedButton(
                                 onClick = onUseManualCredentials,
                                 modifier = Modifier.fillMaxWidth(),
@@ -400,7 +426,10 @@ private fun LoginScreen(
                     ) {
                         OutlinedTextField(
                             value = captchaCode,
-                            onValueChange = { captchaCode = it.trim() },
+                            onValueChange = {
+                                captchaEdited = true
+                                captchaCode = it.trim()
+                            },
                             modifier = Modifier.weight(1f),
                             label = { Text("验证码") },
                             singleLine = true,
@@ -413,8 +442,14 @@ private fun LoginScreen(
                             colors = webVpnTextFieldColors(),
                         )
                         Spacer(Modifier.width(10.dp))
-                        CaptchaImage(state.captcha, state.loadingCaptcha)
-                        IconButton(onClick = onRefreshCaptcha, enabled = !state.loadingCaptcha) {
+                        CaptchaImage(
+                            state.captcha,
+                            state.loadingCaptcha || state.recognizingCaptcha,
+                        )
+                        IconButton(
+                            onClick = onRefreshCaptcha,
+                            enabled = !state.loadingCaptcha && !state.recognizingCaptcha,
+                        ) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新验证码")
                         }
                     }

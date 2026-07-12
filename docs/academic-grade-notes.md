@@ -32,11 +32,11 @@ WebVPN 登录并恢复父域 Cookie
 ```text
 userAccount  空字符串
 userPassword 空字符串
-RANDOMCODE   用户手工输入的验证码
+RANDOMCODE   客户端本机识别并允许用户修改的验证码
 encoded      Base64(账号) + "%%%" + Base64(密码)
 ```
 
-`FormBody` 会按 `application/x-www-form-urlencoded` 对百分号进行转义，服务端解码后得到三个百分号分隔符。客户端不识别或绕过验证码。
+`FormBody` 会按 `application/x-www-form-urlencoded` 对百分号进行转义，服务端解码后得到三个百分号分隔符。客户端使用 ML Kit 在本机识别验证码，不向第三方服务上传验证码图片。
 
 ## 成绩解析
 

@@ -31,6 +31,79 @@ data class CourseGrade(
     val courseCategory: String,
 )
 
+data class SelectedCourse(
+    val sequence: String,
+    val courseName: String,
+    val courseCode: String,
+    val teacher: String,
+    val totalHours: String,
+    val credit: String,
+    val courseAttribute: String,
+    val courseNature: String,
+)
+
+data class CourseSelectionOverview(
+    val terms: List<AcademicTerm>,
+    val defaultTerm: String,
+)
+
+data class EvaluationBatch(
+    val sequence: String,
+    val semester: String,
+    val category: String,
+    val name: String,
+    val startDate: String,
+    val endDate: String,
+    val courseListPath: String,
+)
+
+data class EvaluationCourse(
+    val sequence: String,
+    val courseCode: String,
+    val courseName: String,
+    val teacher: String,
+    val category: String,
+    val totalScore: String,
+    val evaluated: Boolean,
+    val submitted: Boolean,
+    val teachingHours: String,
+    val formPath: String,
+)
+
+data class EvaluationOption(
+    val id: String,
+    val label: String,
+    val score: String,
+    val selected: Boolean,
+)
+
+data class EvaluationQuestion(
+    val id: String,
+    val title: String,
+    val options: List<EvaluationOption>,
+)
+
+data class EvaluationFormField(
+    val name: String,
+    val value: String,
+)
+
+data class EvaluationForm(
+    val courseName: String,
+    val category: String,
+    val actionPath: String,
+    val hiddenFields: List<EvaluationFormField>,
+    val questions: List<EvaluationQuestion>,
+    val suggestionField: String?,
+    val suggestion: String,
+    val readOnly: Boolean,
+)
+
+data class EvaluationAnswer(
+    val questionId: String,
+    val optionId: String,
+)
+
 data class AcademicOverview(
     val terms: List<AcademicTerm>,
 ) {

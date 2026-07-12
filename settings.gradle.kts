@@ -18,5 +18,7 @@ rootProject.name = "CcTools"
 
 include(":app")
 include(":core:academic")
+include(":core:captcha")
 include(":core:ui")
 include(":core:webvpn")
+include(":feature:captcha-autofill")

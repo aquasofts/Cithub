@@ -12,8 +12,8 @@ android {
         applicationId = "edu.ccit.webvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 5
+        versionName = "1.0.0"
     }
 
     buildFeatures {
@@ -45,12 +45,26 @@ android {
             isDebuggable = false
         }
     }
+
+    flavorDimensions += "captcha"
+    productFlavors {
+        create("autoCaptcha") {
+            dimension = "captcha"
+            versionNameSuffix = "-auto-captcha"
+        }
+        create("manualCaptcha") {
+            dimension = "captcha"
+            versionNameSuffix = "-manual-captcha"
+        }
+    }
 }
 
 dependencies {
     implementation(project(":core:academic"))
+    implementation(project(":core:captcha"))
     implementation(project(":core:ui"))
     implementation(project(":core:webvpn"))
+    add("autoCaptchaImplementation", project(":feature:captcha-autofill"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -67,4 +81,21 @@ dependencies {
     implementation(libs.androidx.compose.icons.extended)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+}
+
+// Keep the repository-wide verification entry points after adding the captcha flavors.
+tasks.register("compileDebugKotlin") {
+    group = "verification"
+    dependsOn(
+        "compileAutoCaptchaDebugKotlin",
+        "compileManualCaptchaDebugKotlin",
+    )
+}
+
+tasks.register("lintDebug") {
+    group = "verification"
+    dependsOn(
+        "lintAutoCaptchaDebug",
+        "lintManualCaptchaDebug",
+    )
 }

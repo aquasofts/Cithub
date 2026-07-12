@@ -104,6 +104,88 @@ class AcademicRepository(
         AcademicHtmlParser.parseGrades(html)
     }
 
+    suspend fun loadCourseSelectionOverview(): CourseSelectionOverview = withContext(Dispatchers.IO) {
+        val html = getHtml(
+            BaseUrl.resolve("xkgl/xsxkjgcx")!!.toString(),
+            "加载选课结果查询条件失败",
+        )
+        requireAcademicSession(html)
+        AcademicHtmlParser.parseCourseSelectionOverview(html).also { overview ->
+            if (overview.terms.isEmpty()) {
+                throw AcademicApiException("无法识别选课结果的学期列表，页面结构可能已更新")
+            }
+            persistCookies()
+        }
+    }
+
+    suspend fun loadCourseSelectionResults(semester: String): List<SelectedCourse> =
+        withContext(Dispatchers.IO) {
+            require(semester.isNotBlank()) { "请选择学年学期" }
+            val form = FormBody.Builder().add("xnxqid", semester).build()
+            val html = postForm("xkgl/loadXsxkjgList", form, "加载选课结果失败")
+            requireAcademicSession(html)
+            AcademicHtmlParser.parseSelectedCourses(html).also { persistCookies() }
+        }
+
+    suspend fun loadEvaluationBatches(): List<EvaluationBatch> = withContext(Dispatchers.IO) {
+        val html = getHtml(
+            BaseUrl.resolve("xspj/xspj_find.do")!!.toString(),
+            "加载学生评价批次失败",
+        )
+        requireAcademicSession(html)
+        AcademicHtmlParser.parseEvaluationBatches(html).also { persistCookies() }
+    }
+
+    suspend fun loadEvaluationCourses(path: String): List<EvaluationCourse> =
+        withContext(Dispatchers.IO) {
+            val html = getHtml(resolveAcademicPath(path).toString(), "加载待评价课程失败")
+            requireAcademicSession(html)
+            AcademicHtmlParser.parseEvaluationCourses(html).also { persistCookies() }
+        }
+
+    suspend fun loadEvaluationForm(path: String): EvaluationForm = withContext(Dispatchers.IO) {
+        val html = getHtml(resolveAcademicPath(path).toString(), "加载课程评价表失败")
+        requireAcademicSession(html)
+        AcademicHtmlParser.parseEvaluationForm(html)
+            ?.also { persistCookies() }
+            ?: throw AcademicApiException("无法识别课程评价表，页面结构可能已更新")
+    }
+
+    suspend fun saveEvaluation(
+        form: EvaluationForm,
+        answers: List<EvaluationAnswer>,
+        suggestion: String,
+        submit: Boolean,
+    ): String? = withContext(Dispatchers.IO) {
+        if (form.readOnly) throw AcademicApiException("该评价已提交，不能再修改")
+        val selected = answers.associate { it.questionId to it.optionId }
+        if (form.questions.any { selected[it.id].isNullOrBlank() }) {
+            throw AcademicApiException("请完成每一项评价指标")
+        }
+        val body = FormBody.Builder().apply {
+            form.hiddenFields
+                .filterNot { it.name == "issubmit" || it.name == "sfxyt" }
+                .forEach { add(it.name, it.value) }
+            form.questions.forEach { question ->
+                add("pj0601id_${question.id}", selected.getValue(question.id))
+            }
+            form.suggestionField?.let { add(it, suggestion) }
+            add("issubmit", if (submit) "1" else "0")
+            add("sfxyt", "0")
+        }.build()
+        val request = Request.Builder()
+            .url(resolveAcademicPath(form.actionPath))
+            .post(body)
+            .build()
+        val html = execute(client, request).use { response ->
+            response.requireSuccessful(if (submit) "提交学生评价失败" else "保存学生评价失败")
+            response.body?.string().orEmpty()
+        }
+        requireAcademicSession(html)
+        persistCookies()
+        AcademicHtmlParser.loginError(html)
+    }
+
     suspend fun loadTimetable(semester: String? = null): AcademicTimetable = withContext(Dispatchers.IO) {
         val requestedSemester = semester?.takeIf(String::isNotBlank)
         var current: AcademicTimetable? = null
@@ -207,6 +289,27 @@ class AcademicRepository(
                 throw AcademicApiException("教务系统登录已过期，请重新登录", loginRequired = true)
             }
             response.body?.string() ?: throw AcademicApiException("教务系统返回了空页面")
+        }
+    }
+
+    private fun postForm(path: String, form: FormBody, failureMessage: String): String {
+        val request = Request.Builder()
+            .url(resolveAcademicPath(path))
+            .post(form)
+            .build()
+        return execute(client, request).use { response ->
+            response.requireSuccessful(failureMessage)
+            response.body?.string() ?: throw AcademicApiException("教务系统返回了空页面")
+        }
+    }
+
+    private fun resolveAcademicPath(path: String) = BaseUrl.resolve(path)
+        ?.takeIf { it.host == BaseUrl.host && it.encodedPath.startsWith("/jsxsd/") }
+        ?: throw AcademicApiException("教务系统返回了无效页面地址")
+
+    private fun requireAcademicSession(html: String) {
+        if (AcademicHtmlParser.isStudentLoginPage(html)) {
+            throw AcademicApiException("教务系统登录已过期，请重新登录", loginRequired = true)
         }
     }
 

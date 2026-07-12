@@ -94,6 +94,158 @@ internal object AcademicHtmlParser {
         }.toList()
     }
 
+    fun parseCourseSelectionOverview(html: String): CourseSelectionOverview {
+        val terms = parseSelectOptions(html, "xnxqid")
+        return CourseSelectionOverview(
+            terms = terms,
+            defaultTerm = terms.firstOrNull(AcademicTerm::selected)?.value
+                ?: terms.firstOrNull { it.value.isNotBlank() }?.value.orEmpty(),
+        )
+    }
+
+    fun parseSelectedCourses(html: String): List<SelectedCourse> = tableRows(html)
+        .mapNotNull { row ->
+            val cells = rowCells(row)
+            if (cells.size < SelectionResultColumnCount || cells.firstOrNull() == "序号") {
+                return@mapNotNull null
+            }
+            SelectedCourse(
+                sequence = cells[0],
+                courseName = cells[1],
+                courseCode = cells[2],
+                teacher = cells[3],
+                totalHours = cells[4],
+                credit = cells[5],
+                courseAttribute = cells[6],
+                courseNature = cells[7],
+            )
+        }.toList()
+
+    fun parseEvaluationBatches(html: String): List<EvaluationBatch> {
+        val visibleHtml = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        return tableRows(visibleHtml).mapNotNull { row ->
+            val cells = rowCells(row)
+            if (cells.size < EvaluationBatchColumnCount || cells.firstOrNull() == "序号") {
+                return@mapNotNull null
+            }
+            val path = firstLink(row) ?: return@mapNotNull null
+            EvaluationBatch(
+                sequence = cells[0],
+                semester = cells[1],
+                category = cells[2],
+                name = cells[3],
+                startDate = cells[4],
+                endDate = cells[5],
+                courseListPath = path,
+            )
+        }.toList()
+    }
+
+    fun parseEvaluationCourses(html: String): List<EvaluationCourse> {
+        val table = gradesTableRegex.find(html)?.groupValues?.get(1) ?: return emptyList()
+        return rowRegex.findAll(table).mapNotNull { match ->
+            val row = match.groupValues[1]
+            val cells = rowCells(row)
+            if (cells.size < EvaluationCourseColumnCount || cells.firstOrNull() == "序号") {
+                return@mapNotNull null
+            }
+            val path = firstLink(row) ?: return@mapNotNull null
+            EvaluationCourse(
+                sequence = cells[0],
+                courseCode = cells[1],
+                courseName = cells[2],
+                teacher = cells[3],
+                category = cells[4],
+                totalScore = cells[5],
+                evaluated = cells[6] == "是",
+                submitted = cells[7] == "是",
+                teachingHours = cells[8],
+                formPath = path,
+            )
+        }.toList()
+    }
+
+    fun parseEvaluationForm(html: String): EvaluationForm? {
+        val form = Regex(
+            """<form\b([^>]*)>(.*?)</form>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).findAll(html).firstOrNull { match ->
+            attribute(match.groupValues[1], "action").contains("xspj_save.do")
+        } ?: return null
+        val formAttributes = form.groupValues[1]
+        val formBody = form.groupValues[2]
+        val hiddenFields = Regex(
+            """<input\b([^>]*)>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).findAll(formBody).mapNotNull { match ->
+            val attributes = match.groupValues[1]
+            if (!attribute(attributes, "type").equals("hidden", ignoreCase = true)) {
+                return@mapNotNull null
+            }
+            val name = attribute(attributes, "name")
+            if (name.isBlank()) null else EvaluationFormField(name, attribute(attributes, "value"))
+        }.toList()
+
+        val questions = rowRegex.findAll(formBody).mapNotNull { rowMatch ->
+            val cells = cellRegex.findAll(rowMatch.groupValues[1]).map { it.groupValues[1] }.toList()
+            if (cells.size < 2) return@mapNotNull null
+            val questionId = Regex(
+                """<input\b(?=[^>]*\bname\s*=\s*["']pj06xh["'])(?=[^>]*\bvalue\s*=\s*["']([^"']+)["'])[^>]*>""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).find(cells[0])?.groupValues?.get(1) ?: return@mapNotNull null
+            val scores = hiddenFields
+                .filter { it.name.startsWith("pj0601fz_${questionId}_") }
+                .associate { it.name.removePrefix("pj0601fz_${questionId}_") to it.value }
+            val options = Regex(
+                """(<input\b[^>]*\btype\s*=\s*["']radio["'][^>]*>)(.*?)(?=<input\b|$)""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).findAll(cells[1]).mapNotNull { optionMatch ->
+                val input = optionMatch.groupValues[1]
+                val attributes = input.substringAfter("<input").substringBeforeLast('>')
+                val name = attribute(attributes, "name")
+                if (name != "pj0601id_$questionId") return@mapNotNull null
+                val id = attribute(attributes, "value")
+                if (id.isBlank()) return@mapNotNull null
+                EvaluationOption(
+                    id = id,
+                    label = plainText(optionMatch.groupValues[2]),
+                    score = scores[id].orEmpty(),
+                    selected = Regex("""\bchecked(?:\s*=\s*(?:["'][^"']*["']|[^\s>]+))?""", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(attributes),
+                )
+            }.toList()
+            if (options.isEmpty()) return@mapNotNull null
+            EvaluationQuestion(
+                id = decode(questionId),
+                title = plainText(cells[0]),
+                options = options,
+            )
+        }.toList()
+
+        val textarea = Regex(
+            """<textarea\b([^>]*)>(.*?)</textarea>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(formBody)
+        val heading = Regex(
+            """课程名称\s*[：:]\s*(.*?)\s*(?:&nbsp;|\s)+\s*评教大类\s*[：:]\s*(.*?)\s*(?:<|$)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(html)
+        return EvaluationForm(
+            courseName = heading?.groupValues?.getOrNull(1)?.let(::plainText).orEmpty(),
+            category = heading?.groupValues?.getOrNull(2)?.let(::plainText).orEmpty(),
+            actionPath = decode(attribute(formAttributes, "action")),
+            hiddenFields = hiddenFields,
+            questions = questions,
+            suggestionField = textarea?.groupValues?.get(1)?.let { attribute(it, "name") }
+                ?.takeIf(String::isNotBlank),
+            suggestion = textarea?.groupValues?.get(2)?.let(::plainText).orEmpty(),
+            readOnly = !Regex(
+                """onclick\s*=\s*["'][^"']*saveData\s*\(""",
+                RegexOption.IGNORE_CASE,
+            ).containsMatchIn(formBody),
+        )
+    }
+
     fun parseTimetable(html: String): AcademicTimetable? {
         val table = timetableTableRegex.find(html)?.groupValues?.get(1) ?: return null
         val rows = rowRegex.findAll(table).map { it.groupValues[1] }.toList()
@@ -182,6 +334,25 @@ internal object AcademicHtmlParser {
         }.toList()
     }
 
+    private fun tableRows(html: String): Sequence<String> =
+        rowRegex.findAll(html).map { it.groupValues[1] }
+
+    private fun rowCells(row: String): List<String> =
+        tableCellRegex.findAll(row).map { plainText(it.groupValues[1]) }.toList()
+
+    private fun firstLink(source: String): String? = Regex(
+        """<a\b(?=[^>]*\bhref\s*=\s*["']([^"']+)["'])[^>]*>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    ).find(source)?.groupValues?.get(1)?.let(::decode)?.takeIf(String::isNotBlank)
+
+    private fun attribute(attributes: String, name: String): String {
+        val match = Regex(
+            """(?:^|\s)${Regex.escape(name)}\s*=\s*(?:["']([^"']*)["']|([^\s>]+))""",
+            RegexOption.IGNORE_CASE,
+        ).find(attributes) ?: return ""
+        return decode(match.groupValues[1].ifBlank { match.groupValues[2] })
+    }
+
     private fun parseTimetableCell(cell: String, dayOfWeek: Int, periodIndex: Int): List<TimetableCourse> {
         val detailed = divRegex.findAll(cell).firstOrNull { match ->
             classRegex.find(match.groupValues[1])?.groupValues?.get(1)
@@ -258,6 +429,9 @@ internal object AcademicHtmlParser {
     }
 
     private const val GradeColumnCount = 20
+    private const val SelectionResultColumnCount = 8
+    private const val EvaluationBatchColumnCount = 7
+    private const val EvaluationCourseColumnCount = 19
 }
 
 internal data class TeachingWeek(

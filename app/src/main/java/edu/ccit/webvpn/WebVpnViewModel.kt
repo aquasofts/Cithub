@@ -1,14 +1,18 @@
 package edu.ccit.webvpn
 
+import android.content.Context
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import edu.ccit.webvpn.core.captcha.CaptchaAutomation
 import edu.ccit.webvpn.core.webvpn.CaptchaData
 import edu.ccit.webvpn.core.webvpn.LocalLoginConfiguration
 import edu.ccit.webvpn.core.webvpn.LoginResult
 import edu.ccit.webvpn.core.webvpn.SavedWebVpnAccount
 import edu.ccit.webvpn.core.webvpn.WebVpnAuthRepository
 import edu.ccit.webvpn.core.webvpn.WebVpnCredentialStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,10 +23,13 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class WebVpnUiState(
+    val captchaAutofillEnabled: Boolean = false,
     val initializing: Boolean = true,
     val configuration: LocalLoginConfiguration? = null,
     val captcha: CaptchaData? = null,
+    val recognizedCaptchaCode: String = "",
     val loadingCaptcha: Boolean = false,
+    val recognizingCaptcha: Boolean = false,
     val submitting: Boolean = false,
     val checkingSession: Boolean = false,
     val loginResult: LoginResult? = null,
@@ -35,8 +42,11 @@ data class WebVpnUiState(
 class WebVpnViewModel(
     private val repository: WebVpnAuthRepository,
     private val credentialStore: WebVpnCredentialStore,
+    private val captchaAutomation: CaptchaAutomation,
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(WebVpnUiState())
+    private val _uiState = MutableStateFlow(
+        WebVpnUiState(captchaAutofillEnabled = captchaAutomation.isEnabled),
+    )
     val uiState: StateFlow<WebVpnUiState> = _uiState.asStateFlow()
     private var sessionMonitorJob: Job? = null
     private var appInForeground: Boolean = false
@@ -69,7 +79,7 @@ class WebVpnViewModel(
     }
 
     fun refreshCaptcha() {
-        if (_uiState.value.loadingCaptcha) return
+        if (_uiState.value.loadingCaptcha || _uiState.value.recognizingCaptcha) return
         viewModelScope.launch { loadCaptcha() }
     }
 
@@ -133,6 +143,15 @@ class WebVpnViewModel(
                 )
 
                 var saveWarning: String? = null
+                if (captchaAutomation.isEnabled) {
+                    runCatching {
+                        credentialStore.saveLastLoginCredential(normalizedUsername, resolvedPassword)
+                    }.onFailure {
+                        saveWarning = "已登录，但保活凭据保存失败"
+                    }
+                } else {
+                    runCatching { credentialStore.clearLastLoginCredential() }
+                }
                 val shouldSave = rememberPassword || selectedUsername == normalizedUsername
                 if (shouldSave) {
                     runCatching { credentialStore.saveCredential(normalizedUsername, resolvedPassword) }
@@ -152,6 +171,8 @@ class WebVpnViewModel(
                     )
                 }
                 startSessionMonitor()
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (error: Throwable) {
                 _uiState.update {
                     it.copy(
@@ -172,6 +193,7 @@ class WebVpnViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true) }
             repository.logout()
+            runCatching { credentialStore.clearLastLoginCredential() }
             enterLoginState(message = null)
         }
     }
@@ -182,6 +204,9 @@ class WebVpnViewModel(
 
     private fun initialize() {
         viewModelScope.launch {
+            if (!captchaAutomation.isEnabled) {
+                runCatching { credentialStore.clearLastLoginCredential() }
+            }
             val savedAccounts = runCatching { credentialStore.getSavedAccounts() }
                 .getOrDefault(emptyList())
             _uiState.update { it.copy(savedAccounts = savedAccounts) }
@@ -200,7 +225,7 @@ class WebVpnViewModel(
                             )
                         }
                     } else {
-                        enterLoginState(message = null)
+                        recoverOrEnterLogin(expiredMessage = null)
                     }
                 }
                 .onFailure { error ->
@@ -219,7 +244,7 @@ class WebVpnViewModel(
         runCatching { repository.revalidateSession() }
             .onSuccess { result ->
                 if (result == null) {
-                    enterLoginState("WebVPN 登录已过期，请重新登录")
+                    recoverOrEnterLogin("WebVPN 登录已过期，请重新登录")
                 } else {
                     _uiState.update {
                         it.copy(
@@ -241,9 +266,64 @@ class WebVpnViewModel(
             }
     }
 
+    private suspend fun recoverOrEnterLogin(expiredMessage: String?) {
+        when (val outcome = attemptAutomaticLogin()) {
+            is AutomaticLoginOutcome.Success -> {
+                _uiState.update {
+                    it.copy(
+                        initializing = false,
+                        checkingSession = false,
+                        submitting = false,
+                        loginResult = outcome.result,
+                        lastSessionCheckedAt = System.currentTimeMillis(),
+                        selectedSavedUsername = outcome.username.takeIf { username ->
+                            it.savedAccounts.any { account -> account.username == username }
+                        },
+                        message = null,
+                    )
+                }
+                startSessionMonitor()
+            }
+            AutomaticLoginOutcome.NoCredential -> enterLoginState(expiredMessage)
+            is AutomaticLoginOutcome.Failed -> enterLoginState(
+                "登录状态已失效，请重新登录",
+            )
+        }
+    }
+
+    private suspend fun attemptAutomaticLogin(): AutomaticLoginOutcome {
+        if (!captchaAutomation.isEnabled) return AutomaticLoginOutcome.NoCredential
+        val credential = runCatching { credentialStore.getLastLoginCredential() }.getOrNull()
+            ?: return AutomaticLoginOutcome.NoCredential
+        repeat(MaxAutomaticLoginAttempts) { attempt ->
+            try {
+                val configuration = repository.loadLoginConfiguration()
+                val captcha = if (configuration.requiresGraphCaptcha) repository.loadCaptcha() else null
+                val code = captcha?.let { captchaAutomation.recognize(it.imageBytes()) }.orEmpty()
+                if (configuration.requiresGraphCaptcha && code.isBlank()) {
+                    error("验证码自动识别失败")
+                }
+                val result = repository.login(
+                    username = credential.username,
+                    password = credential.password,
+                    captchaId = captcha?.id.orEmpty(),
+                    code = code,
+                    configuration = configuration,
+                )
+                return AutomaticLoginOutcome.Success(result, credential.username)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Throwable) {
+                if (attempt < MaxAutomaticLoginAttempts - 1) delay(AutomaticLoginRetryDelayMs)
+            }
+        }
+        return AutomaticLoginOutcome.Failed
+    }
+
     private suspend fun enterLoginState(message: String?) {
         val previous = _uiState.value
         _uiState.value = WebVpnUiState(
+            captchaAutofillEnabled = captchaAutomation.isEnabled,
             initializing = false,
             savedAccounts = previous.savedAccounts,
             selectedSavedUsername = previous.selectedSavedUsername,
@@ -266,16 +346,45 @@ class WebVpnViewModel(
     }
 
     private suspend fun loadCaptcha() {
-        _uiState.update { it.copy(loadingCaptcha = true) }
+        _uiState.update {
+            it.copy(
+                captcha = null,
+                recognizedCaptchaCode = "",
+                loadingCaptcha = true,
+                recognizingCaptcha = false,
+            )
+        }
         runCatching { repository.loadCaptcha() }
             .onSuccess { captcha ->
-                _uiState.update { it.copy(captcha = captcha, loadingCaptcha = false) }
+                _uiState.update {
+                    it.copy(
+                        captcha = captcha,
+                        loadingCaptcha = false,
+                        recognizingCaptcha = captchaAutomation.isEnabled,
+                    )
+                }
+                if (!captchaAutomation.isEnabled) return@onSuccess
+                val recognizedCode = runCatching {
+                    captchaAutomation.recognize(captcha.imageBytes())
+                }.getOrDefault("")
+                _uiState.update {
+                    if (it.captcha?.id == captcha.id) {
+                        it.copy(
+                            recognizedCaptchaCode = recognizedCode,
+                            recognizingCaptcha = false,
+                        )
+                    } else {
+                        it
+                    }
+                }
             }
             .onFailure { error ->
                 _uiState.update {
                     it.copy(
                         captcha = null,
+                        recognizedCaptchaCode = "",
                         loadingCaptcha = false,
+                        recognizingCaptcha = false,
                         message = error.message ?: "验证码加载失败",
                     )
                 }
@@ -284,22 +393,42 @@ class WebVpnViewModel(
 
     override fun onCleared() {
         sessionMonitorJob?.cancel()
+        captchaAutomation.close()
         super.onCleared()
     }
 
     class Factory(
         private val repository: WebVpnAuthRepository,
         private val credentialStore: WebVpnCredentialStore,
+        private val context: Context,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(WebVpnViewModel::class.java))
-            return WebVpnViewModel(repository, credentialStore) as T
+            return WebVpnViewModel(
+                repository,
+                credentialStore,
+                CaptchaAutomationProvider.get(context),
+            ) as T
         }
     }
 
     private companion object {
         const val ResumeCheckDebounceMs = 30_000L
         const val SessionCheckIntervalMs = 5 * 60_000L
+        const val AutomaticLoginRetryDelayMs = 1_000L
+        const val MaxAutomaticLoginAttempts = 10
     }
+}
+
+private fun CaptchaData.imageBytes(): ByteArray {
+    val encoded = captcha.substringAfter("base64,", missingDelimiterValue = "")
+    require(encoded.isNotBlank()) { "验证码图片数据为空" }
+    return Base64.decode(encoded, Base64.DEFAULT)
+}
+
+private sealed interface AutomaticLoginOutcome {
+    data class Success(val result: LoginResult, val username: String) : AutomaticLoginOutcome
+    data object NoCredential : AutomaticLoginOutcome
+    data object Failed : AutomaticLoginOutcome
 }

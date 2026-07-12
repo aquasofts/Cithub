@@ -2,6 +2,13 @@
 
 These rules apply to the entire repository.
 
+## Machine-local build instructions
+
+- Before running any local Android build, read `AgentBuild.md` when it exists and follow its machine-specific JDK, Android SDK, Gradle, signing, device, and verification instructions.
+- `AgentBuild.md` is intentionally machine-local because it may contain private usernames, absolute paths, device details, and other workstation-specific information. It must remain listed in `.gitignore`; never stage, commit, upload, or paste its private contents into public logs or documentation.
+- After a successful local build, update `AgentBuild.md` with any newly discovered commands, environment requirements, failures, and fixes that will help the next AI on the same computer. If the file does not exist, create it locally without removing its `.gitignore` entry.
+- Repository-wide rules in this file remain authoritative. Machine-local instructions supplement them and must not be used to weaken required verification or security rules.
+
 ## Prefer platform solutions
 
 - Prefer stable AndroidX, Jetpack Compose, and Material 3 components over custom navigation, animation, gesture, or lifecycle implementations.

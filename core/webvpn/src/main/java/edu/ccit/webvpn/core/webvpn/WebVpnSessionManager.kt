@@ -36,14 +36,30 @@ interface WebVpnCredentialStore {
     suspend fun getSavedPassword(username: String): String?
     suspend fun saveCredential(username: String, password: String)
     suspend fun deleteCredential(username: String)
+    suspend fun getLastLoginCredential(): LastWebVpnCredential?
+    suspend fun saveLastLoginCredential(username: String, password: String)
+    suspend fun clearLastLoginCredential()
 }
+
+data class LastWebVpnCredential(
+    val username: String,
+    val password: String,
+)
 
 interface AcademicCredentialStore {
     suspend fun getSavedAcademicAccounts(): List<SavedAcademicAccount>
     suspend fun getSavedAcademicPassword(username: String): String?
     suspend fun saveAcademicCredential(username: String, password: String)
     suspend fun deleteAcademicCredential(username: String)
+    suspend fun getLastAcademicLoginCredential(): LastAcademicCredential?
+    suspend fun saveLastAcademicLoginCredential(username: String, password: String)
+    suspend fun clearLastAcademicLoginCredential()
 }
+
+data class LastAcademicCredential(
+    val username: String,
+    val password: String,
+)
 
 data class SavedAcademicAccount(
     val username: String,
@@ -59,7 +75,9 @@ class WebVpnSessionManager(
     private val tokenKey = stringPreferencesKey("token")
     private val cookiesKey = stringPreferencesKey("cookies")
     private val savedCredentialsKey = stringPreferencesKey("saved_credentials")
+    private val lastLoginCredentialKey = stringPreferencesKey("last_login_credential")
     private val savedAcademicCredentialsKey = stringPreferencesKey("saved_academic_credentials")
+    private val lastAcademicLoginCredentialKey = stringPreferencesKey("last_academic_login_credential")
     private val deviceIdKey = stringPreferencesKey("device_id")
     private val credentialMutex = Mutex()
 
@@ -143,6 +161,34 @@ class WebVpnSessionManager(
         }
     }
 
+    override suspend fun getLastLoginCredential(): LastWebVpnCredential? = credentialMutex.withLock {
+        val encoded = readSecret(lastLoginCredentialKey) ?: return@withLock null
+        runCatching { json.decodeFromString<StoredLastLoginCredential>(encoded) }
+            .map { LastWebVpnCredential(it.username, it.password) }
+            .getOrElse {
+                appContext.webVpnDataStore.edit { it.remove(lastLoginCredentialKey) }
+                null
+            }
+    }
+
+    override suspend fun saveLastLoginCredential(username: String, password: String) {
+        val normalizedUsername = username.trim()
+        require(normalizedUsername.isNotBlank()) { "用户名不能为空" }
+        require(password.isNotBlank()) { "密码不能为空" }
+        credentialMutex.withLock {
+            val value = json.encodeToString(StoredLastLoginCredential(normalizedUsername, password))
+            appContext.webVpnDataStore.edit {
+                it[lastLoginCredentialKey] = secretCipher.encrypt(value)
+            }
+        }
+    }
+
+    override suspend fun clearLastLoginCredential() {
+        credentialMutex.withLock {
+            appContext.webVpnDataStore.edit { it.remove(lastLoginCredentialKey) }
+        }
+    }
+
     override suspend fun getSavedAcademicAccounts(): List<SavedAcademicAccount> = credentialMutex.withLock {
         readAcademicCredentials()
             .sortedByDescending(StoredAcademicCredential::lastUsedAt)
@@ -174,6 +220,35 @@ class WebVpnSessionManager(
             writeAcademicCredentials(
                 readAcademicCredentials().filterNot { it.username == username.trim() },
             )
+        }
+    }
+
+    override suspend fun getLastAcademicLoginCredential(): LastAcademicCredential? =
+        credentialMutex.withLock {
+            val encoded = readSecret(lastAcademicLoginCredentialKey) ?: return@withLock null
+            runCatching { json.decodeFromString<StoredLastAcademicCredential>(encoded) }
+                .map { LastAcademicCredential(it.username, it.password) }
+                .getOrElse {
+                    appContext.webVpnDataStore.edit { it.remove(lastAcademicLoginCredentialKey) }
+                    null
+                }
+        }
+
+    override suspend fun saveLastAcademicLoginCredential(username: String, password: String) {
+        val normalizedUsername = username.trim()
+        require(normalizedUsername.isNotBlank()) { "学号不能为空" }
+        require(password.isNotBlank()) { "教务系统密码不能为空" }
+        credentialMutex.withLock {
+            val value = json.encodeToString(StoredLastAcademicCredential(normalizedUsername, password))
+            appContext.webVpnDataStore.edit {
+                it[lastAcademicLoginCredentialKey] = secretCipher.encrypt(value)
+            }
+        }
+    }
+
+    override suspend fun clearLastAcademicLoginCredential() {
+        credentialMutex.withLock {
+            appContext.webVpnDataStore.edit { it.remove(lastAcademicLoginCredentialKey) }
         }
     }
 
@@ -249,6 +324,18 @@ private data class StoredWebVpnCredential(
     val username: String,
     val password: String,
     val lastUsedAt: Long,
+)
+
+@Serializable
+private data class StoredLastLoginCredential(
+    val username: String,
+    val password: String,
+)
+
+@Serializable
+private data class StoredLastAcademicCredential(
+    val username: String,
+    val password: String,
 )
 
 @Serializable

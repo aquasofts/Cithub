@@ -3,5 +3,6 @@
 .idea/
 build/
 local.properties
+AgentBuild.md
 *.iml
 .DS_Store
