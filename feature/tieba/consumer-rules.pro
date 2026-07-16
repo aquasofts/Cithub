@@ -5,4 +5,5 @@
 }
 -keep interface edu.ccit.webvpn.feature.tieba.network.TiebaSupportApi { *; }
 -keep interface edu.ccit.webvpn.feature.tieba.network.TiebaReadApi { *; }
+-keep interface edu.ccit.webvpn.feature.tieba.network.TiebaPicPageApi { *; }
 -keep class com.huanchengfly.tieba.post.api.models.protos.** { *; }

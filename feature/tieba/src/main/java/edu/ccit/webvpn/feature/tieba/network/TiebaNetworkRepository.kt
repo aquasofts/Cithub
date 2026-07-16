@@ -24,6 +24,7 @@ import edu.ccit.webvpn.feature.tieba.ForumPage
 import edu.ccit.webvpn.feature.tieba.ForumSort
 import edu.ccit.webvpn.feature.tieba.ForumSummary
 import edu.ccit.webvpn.feature.tieba.ForumThread
+import edu.ccit.webvpn.feature.tieba.LoadPicPageData
 import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME
@@ -154,8 +155,28 @@ class TiebaNetworkRepository internal constructor(
     private val supportApi: TiebaSupportApi,
     private val readApi: TiebaReadApi,
     private val readRequests: TiebaReadRequestFactory,
+    private val picPageApi: TiebaPicPageApi,
+    private val picPageRequests: TiebaPicPageRequestFactory,
     private val gson: Gson,
 ) {
+    /** Mirrors TiebaLite's photo-view initialization and returns a fresh, signed original URL. */
+    suspend fun resolveOriginalImage(
+        data: LoadPicPageData,
+        account: AccountEntity? = null,
+    ): String = runRead {
+        val response = picPageApi.picPage(
+            picPageRequests.picPage(data, account?.toReadCredentials()),
+        )
+        if (response.errorCode != "0") {
+            throw TiebaReadFailure.Service(IOException("PicPage API ${response.errorCode}"))
+        }
+        val picture = response.picList.firstOrNull { it.img.original.id == data.picId }
+            ?: response.picList.firstOrNull { it.overallIndex.toIntOrNull() == data.picIndex }
+            ?: throw TiebaReadFailure.Data()
+        picture.img.bestQualitySrc().takeIf(::isAuthorizedTiebaImageUrl)
+            ?: throw TiebaReadFailure.Data()
+    }
+
     suspend fun loadForum(
         page: Int,
         sort: ForumSort,
@@ -492,6 +513,7 @@ class TiebaNetworkRepository internal constructor(
             floors = floors,
             page = page.current_page.takeIf { it > 0 } ?: requestedPage,
             totalPages = page.total_page.coerceAtLeast(requestedPage),
+            replyCount = thread.replyNum,
             body = body,
             forumId = forum.id,
             forumName = forum.name,
@@ -577,14 +599,17 @@ class TiebaNetworkRepository internal constructor(
     }
 
     private fun mapUserThread(post: PostInfoList): TiebaUserPost {
-        val images = buildList {
-            post.media.forEach { media ->
-                sequenceOf(media.originPic, media.bigPic, media.srcPic)
-                    .firstOrNull(String::isNotBlank)?.let(::add)
-            }
+        // TiebaLite treats the explicit media list as authoritative. The rich abstract often
+        // repeats the same image through a different CDN path, which otherwise creates a
+        // duplicated two-column preview on user profile pages.
+        val mediaImages = post.media.mapNotNull { media ->
+            sequenceOf(media.originPic, media.bigPic, media.srcPic)
+                .firstOrNull(String::isNotBlank)
+        }
+        val images = (mediaImages.ifEmpty {
             post.rich_abstract.filter { it.type == 3 || it.type == 20 }
-                .forEach { it.originalImage()?.let(::add) }
-        }.map(::normalizeTiebaUrl).distinctBy(::tiebaImageIdentity)
+                .mapNotNull { it.originalImage() }
+        }).map(::normalizeTiebaUrl).distinctBy(::tiebaImageIdentity)
         val excerpt = post.rich_abstract.mapTiebaContent().plainText().ifBlank {
             post._abstract.ifBlank {
                 post.abstract_thread.joinToString("") { it.text }
@@ -728,18 +753,40 @@ class TiebaNetworkRepository internal constructor(
             val readClient = supportClient.newBuilder()
                 .addInterceptor(tiebaReadHeaderInterceptor(appContext, identity))
                 .build()
+            val picPageClient = supportClient.newBuilder()
+                .addInterceptor { chain ->
+                    chain.proceed(
+                        chain.request().newBuilder()
+                            .header("User-Agent", "bdtb for Android 7.2.0.0")
+                            .header("Cookie", "ka=open")
+                            .header("Pragma", "no-cache")
+                            .header("cuid", identity.cuid)
+                            .header("cuid_galaxy2", identity.cuid)
+                            .header("client_logid", identity.firstInstallTime.toString())
+                            .build(),
+                    )
+                }.build()
             return TiebaNetworkRepository(
                 context = appContext,
                 client = supportClient,
                 supportApi = createSupportRetrofit(supportClient, gson).create(TiebaSupportApi::class.java),
                 readApi = createTiebaReadRetrofit(readClient).create(TiebaReadApi::class.java),
                 readRequests = TiebaReadRequestFactory(appContext, identity),
+                picPageApi = createPicPageRetrofit(picPageClient, gson).create(TiebaPicPageApi::class.java),
+                picPageRequests = TiebaPicPageRequestFactory(appContext, identity),
                 gson = gson,
             )
         }
 
         internal fun createSupportRetrofit(client: OkHttpClient, gson: Gson = Gson()): Retrofit = Retrofit.Builder()
             .baseUrl("https://tieba.baidu.com/")
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .validateEagerly(true)
+            .build()
+
+        internal fun createPicPageRetrofit(client: OkHttpClient, gson: Gson = Gson()): Retrofit = Retrofit.Builder()
+            .baseUrl("https://c.tieba.baidu.com/")
             .client(client)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .validateEagerly(true)
@@ -811,7 +858,10 @@ private fun PbContent.toTiebaImage(): TiebaContent.Image? {
     val (width, height) = dimensions()
     return TiebaContent.Image(
         previewUrl = normalizeTiebaUrl(preview),
-        originalUrl = toOriginalTiebaImage(original.ifBlank { preview }),
+        // Do not remove tbpicau or rewrite to an unsigned /forum/pic/item URL. An unsigned
+        // item URL is exactly what makes Baidu return its 238 x 238 Tieba-logo placeholder.
+        originalUrl = normalizeTiebaUrl(original.ifBlank { preview }),
+        picId = imageId(original.ifBlank { preview }),
         width = width,
         height = height,
     )
@@ -851,6 +901,8 @@ private fun tiebaImageIdentity(raw: String): String {
         ?: normalized.substringBefore('?')
 }
 
+private fun imageId(raw: String): String = tiebaImageIdentity(raw).substringBeforeLast('.')
+
 private fun plainText(value: String): String = Jsoup.parse(value.replace("<br/>", "\n")).text()
     .replace(Regex("(?:image_emoticon|shoubai_emoji)\\d*"), "[表情]")
 
@@ -866,13 +918,7 @@ private fun normalizeTiebaUrl(raw: String): String = when {
     else -> raw
 }
 
-private fun toOriginalTiebaImage(raw: String): String {
-    val url = originalImageUrl(raw)
-    return if (url.contains("/forum/") && url.contains("/sign=")) {
-        val parsed = url.toHttpUrl()
-        "https://${parsed.host}/forum/pic/item/${url.substringAfterLast('/')}"
-    } else url
-}
+private fun toOriginalTiebaImage(raw: String): String = normalizeTiebaUrl(raw)
 
 private fun formatEpoch(seconds: Long): String = if (seconds <= 0) "" else DateFormat.getDateTimeInstance(
     DateFormat.SHORT,

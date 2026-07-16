@@ -25,6 +25,7 @@ import com.huanchengfly.tieba.post.api.models.protos.profile.ProfileResponse
 import com.huanchengfly.tieba.post.api.models.protos.userPost.UserPostResponse
 import edu.ccit.webvpn.feature.tieba.FloorSort
 import edu.ccit.webvpn.feature.tieba.ForumSort
+import edu.ccit.webvpn.feature.tieba.LoadPicPageData
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaContent
@@ -35,6 +36,7 @@ import okhttp3.RequestBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -68,9 +70,11 @@ class TiebaNetworkTest {
         assertEquals(1, thread.body?.floor)
         assertEquals("12", thread.floors.single().postId)
         assertEquals("正文#(黑线)", thread.floors.single().content)
-        assertEquals("https://img.example/original.jpg", thread.floors.single().imageUrls.single())
+        assertEquals("https://img.example/original.jpg?tbpicau=fresh-token", thread.floors.single().imageUrls.single())
         val image = thread.floors.single().richContent.filterIsInstance<TiebaContent.Image>().single()
         assertEquals("https://img.example/preview.jpg?token=kept", image.previewUrl)
+        assertEquals("https://img.example/original.jpg?tbpicau=fresh-token", image.originalUrl)
+        assertEquals("original", image.picId)
         assertEquals("回复者", thread.floors.single().replies.single().authorNickname)
         assertEquals("#(泪)", thread.floors.single().replies.single().content)
     }
@@ -197,11 +201,87 @@ class TiebaNetworkTest {
         val client = OkHttpClient()
         assertNotNull(TiebaNetworkRepository.createSupportRetrofit(client).create(TiebaSupportApi::class.java))
         assertNotNull(createTiebaReadRetrofit(client).create(TiebaReadApi::class.java))
+        assertNotNull(TiebaNetworkRepository.createPicPageRetrofit(client).create(TiebaPicPageApi::class.java))
+    }
+
+    @Test
+    fun picPageResolutionUsesTiebaLitesSignedWaterUrl() = runBlocking {
+        val signedOriginal =
+            "https://tiebapic.baidu.com/forum/pic/item/picture.jpg?tbpicau=2026-07-27_token"
+        val picPageApi = FakeTiebaPicPageApi(
+            PicPageResponse(
+                errorCode = "0",
+                picList = listOf(
+                    PicPagePicture(
+                        overallIndex = "1",
+                        img = PicPageImage(
+                            original = PicPageImageInfo(
+                                id = "picture",
+                                width = "160",
+                                height = "142",
+                                size = "6497",
+                                format = "1",
+                                waterUrl = signedOriginal,
+                                bigCdnSrc = "https://tiebapic.baidu.com/forum/w=960/picture.jpg?tbpicau=preview",
+                                url = signedOriginal,
+                                originalSrc = signedOriginal,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val request = LoadPicPageData(
+            forumId = TARGET_FORUM_ID,
+            forumName = TARGET_FORUM_NAME,
+            seeLz = false,
+            objType = "pb",
+            picId = "picture",
+            picIndex = 1,
+            threadId = 9,
+            postId = 12,
+            originUrl = "https://tiebapic.baidu.com/forum/pic/item/picture.jpg",
+        )
+
+        val resolved = repository(
+            FakeTiebaReadApi(successForum(), successThread()),
+            picPageApi = picPageApi,
+        ).resolveOriginalImage(request)
+
+        assertEquals(signedOriginal, resolved)
+        assertTrue(resolved.contains("tbpicau="))
+    }
+
+    @Test
+    fun miniPicPageRequestMatchesTiebaLiteFieldsAndSignature() {
+        val identity = TiebaClientIdentity(context)
+        val fields = TiebaPicPageRequestFactory(context, identity).picPage(
+            LoadPicPageData(
+                forumId = TARGET_FORUM_ID,
+                forumName = TARGET_FORUM_NAME,
+                seeLz = false,
+                objType = "pb",
+                picId = "picture",
+                picIndex = 1,
+                threadId = 9,
+                postId = 12,
+                originUrl = null,
+            ),
+            credentials = null,
+        )
+
+        assertEquals("7.2.0.0", fields["_client_version"])
+        assertEquals("mini", fields["subapp_type"])
+        assertEquals("10", fields["next"])
+        assertEquals("0", fields["prev"])
+        assertEquals("1", fields["not_see_lz"])
+        assertEquals(miniTiebaSign(fields), fields["sign"])
     }
 
     private fun repository(
         readApi: TiebaReadApi,
         supportApi: TiebaSupportApi = FakeTiebaSupportApi(),
+        picPageApi: TiebaPicPageApi = FakeTiebaPicPageApi(),
     ): TiebaNetworkRepository {
         val identity = TiebaClientIdentity(context)
         return TiebaNetworkRepository(
@@ -210,6 +290,8 @@ class TiebaNetworkTest {
             supportApi = supportApi,
             readApi = readApi,
             readRequests = TiebaReadRequestFactory(context, identity),
+            picPageApi = picPageApi,
+            picPageRequests = TiebaPicPageRequestFactory(context, identity),
             gson = Gson(),
         )
     }
@@ -251,7 +333,7 @@ class TiebaNetworkTest {
                         PbContent(
                             type = 3,
                             bigCdnSrc = "https://img.example/preview.jpg?token=kept",
-                            originSrc = "https://img.example/original.jpg",
+                            originSrc = "https://img.example/original.jpg?tbpicau=fresh-token",
                             bsize = "800,600",
                         ),
                     ),
@@ -279,7 +361,7 @@ class TiebaNetworkTest {
                         PbContent(
                             type = 3,
                             bigCdnSrc = "https://img.example/preview.jpg?token=kept",
-                            originSrc = "https://img.example/original.jpg",
+                            originSrc = "https://img.example/original.jpg?tbpicau=fresh-token",
                             bsize = "800,600",
                         ),
                     ),
@@ -349,4 +431,10 @@ private class FakeTiebaSupportApi(
     ): SearchEnvelope = searchResponse
 
     override suspend fun profile(needUser: Int, cookie: String): ProfileEnvelope = ProfileEnvelope()
+}
+
+private class FakeTiebaPicPageApi(
+    private val response: PicPageResponse = PicPageResponse(errorCode = "0"),
+) : TiebaPicPageApi {
+    override suspend fun picPage(fields: Map<String, String>): PicPageResponse = response
 }

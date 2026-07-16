@@ -112,6 +112,7 @@ sealed interface TiebaContent {
     data class Image(
         val previewUrl: String,
         val originalUrl: String,
+        val picId: String = "",
         val width: Int? = null,
         val height: Int? = null,
     ) : TiebaContent
@@ -124,6 +125,24 @@ sealed interface TiebaContent {
         val height: Int? = null,
     ) : TiebaContent
 }
+
+/**
+ * The arguments TiebaLite sends to /c/f/pb/picpage before opening its photo viewer.
+ * Keeping these values lets the viewer refresh an expired tbpicau URL instead of
+ * accidentally displaying Tieba's 238 x 238 failure placeholder.
+ */
+@Immutable
+data class LoadPicPageData(
+    val forumId: Long,
+    val forumName: String,
+    val seeLz: Boolean,
+    val objType: String,
+    val picId: String,
+    val picIndex: Int,
+    val threadId: Long,
+    val postId: Long,
+    val originUrl: String?,
+)
 
 @Immutable
 data class FloorReply(
@@ -168,6 +187,7 @@ data class ThreadPage(
     val floors: List<ThreadFloor>,
     val page: Int,
     val totalPages: Int,
+    val replyCount: Int = 0,
     val body: ThreadFloor? = null,
     val forumId: Long = TARGET_FORUM_ID,
     val forumName: String = TARGET_FORUM_NAME,

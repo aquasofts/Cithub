@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,16 +26,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -46,8 +47,8 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -73,22 +74,30 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBarScrollBehavior
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -98,6 +107,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
@@ -109,6 +119,7 @@ import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
+import coil3.size.SizeResolver
 import edu.ccit.webvpn.core.ui.CcitCard
 import edu.ccit.webvpn.core.ui.CcitColors
 import edu.ccit.webvpn.feature.tieba.FloorSort
@@ -116,6 +127,7 @@ import edu.ccit.webvpn.feature.tieba.ForumPage
 import edu.ccit.webvpn.feature.tieba.ForumSort
 import edu.ccit.webvpn.feature.tieba.ForumSummary
 import edu.ccit.webvpn.feature.tieba.ForumThread
+import edu.ccit.webvpn.feature.tieba.LoadPicPageData
 import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_DISPLAY_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaAccount
@@ -124,6 +136,7 @@ import edu.ccit.webvpn.feature.tieba.TiebaRuntime
 import edu.ccit.webvpn.feature.tieba.TiebaUserPost
 import edu.ccit.webvpn.feature.tieba.TiebaUserProfile
 import edu.ccit.webvpn.feature.tieba.ThreadFloor
+import edu.ccit.webvpn.feature.tieba.network.isAuthorizedTiebaImageUrl
 import edu.ccit.webvpn.feature.tieba.network.parseLoginCookies
 import java.text.DateFormat
 import java.time.Instant
@@ -139,12 +152,91 @@ private const val ProfileRoute = "profile"
 private const val ImageRoute = "image"
 private val TiebaWindowInsets = WindowInsets(0, 0, 0, 0)
 
+/** Mirrors TiebaLite's photo-view handoff: the viewer receives the original URL, never the preview URL. */
+private data class PhotoViewData(
+    val data: LoadPicPageData? = null,
+    val picItems: List<PicItem>,
+    val index: Int = 0,
+)
+
+private data class PicItem(
+    val picId: String,
+    val picIndex: Int,
+    val originUrl: String,
+    val postId: Long? = null,
+)
+
+private class ForumScreenState {
+    var page by mutableIntStateOf(1)
+    var goodOnly by mutableStateOf(false)
+    var threads by mutableStateOf(emptyList<ForumThread>())
+    var hasMore by mutableStateOf(false)
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var queryKey by mutableStateOf<String?>(null)
+    val listState = LazyListState()
+}
+
+private class SearchScreenState {
+    var keyword by mutableStateOf("")
+    var submittedKeyword by mutableStateOf("")
+    var page by mutableIntStateOf(1)
+    var result by mutableStateOf(ForumPage(ForumSummary(), emptyList(), 1, false))
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    val listState = LazyListState()
+}
+
+private class ThreadScreenState(initialTitle: String) {
+    var page by mutableIntStateOf(0)
+    var title by mutableStateOf(initialTitle)
+    var totalPages by mutableIntStateOf(1)
+    var replyCount by mutableIntStateOf(0)
+    var body by mutableStateOf<ThreadFloor?>(null)
+    var floors by mutableStateOf(emptyList<ThreadFloor>())
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var queryKey by mutableStateOf<String?>(null)
+    val listState = LazyListState()
+}
+
+private class FloorRepliesScreenState {
+    var page by mutableIntStateOf(0)
+    var totalPages by mutableIntStateOf(1)
+    var replies by mutableStateOf(emptyList<edu.ccit.webvpn.feature.tieba.FloorReply>())
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    val listState = LazyListState()
+}
+
+private class UserPostsScreenState {
+    var page by mutableIntStateOf(0)
+    var posts by mutableStateOf(emptyList<TiebaUserPost>())
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var hasMore by mutableStateOf(false)
+    val listState = LazyListState()
+}
+
+private class UserProfileScreenState {
+    var profile by mutableStateOf<TiebaUserProfile?>(null)
+    var profileLoading by mutableStateOf(true)
+    var profileError by mutableStateOf<String?>(null)
+    var selectedTab by mutableStateOf(UserProfileTab.Threads)
+    val tabStates = UserProfileTab.entries.associateWith { UserPostsScreenState() }
+}
+
 @Composable
 fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val runtime = remember(context) { TiebaRuntime.get(context) }
     val navigator = rememberNavController()
-    var fullImageUrl by rememberSaveable { mutableStateOf("") }
+    var photoViewData by remember { mutableStateOf<PhotoViewData?>(null) }
+    val forumState = remember { ForumScreenState() }
+    val searchState = remember { SearchScreenState() }
+    val threadStates = remember { mutableMapOf<String, ThreadScreenState>() }
+    val floorRepliesStates = remember { mutableMapOf<String, FloorRepliesScreenState>() }
+    val profileStates = remember { mutableMapOf<Long, UserProfileScreenState>() }
 
     fun openThread(thread: ForumThread, focusPostId: Long = 0) {
         navigator.navigate(
@@ -162,13 +254,14 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
             ForumScreen(
                 active = active,
                 runtime = runtime,
+                state = forumState,
                 onSearch = { navigator.navigate(SearchRoute) },
                 onThread = ::openThread,
                 onProfile = { openProfile(it.authorId) },
             )
         }
         composable(SearchRoute) {
-            SearchScreen(runtime, navigator::navigateUp, ::openThread) { openProfile(it.authorId) }
+            SearchScreen(runtime, searchState, navigator::navigateUp, ::openThread) { openProfile(it.authorId) }
         }
         composable(
             "$ThreadRoute/{id}?title={title}&forumId={forumId}&forumName={forumName}&postId={postId}",
@@ -182,16 +275,21 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
         ) { entry ->
             val forumId = entry.arguments?.getLong("forumId") ?: edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
             val forumName = entry.arguments?.getString("forumName").orEmpty().ifBlank { edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME }
+            val threadId = entry.arguments?.getString("id").orEmpty()
+            val focusPostId = entry.arguments?.getLong("postId")?.takeIf { it > 0 }?.toString()
+            val screenState = threadStates.getOrPut("$threadId:${focusPostId.orEmpty()}") {
+                ThreadScreenState(entry.arguments?.getString("title").orEmpty())
+            }
             ThreadScreen(
                 runtime = runtime,
-                threadId = entry.arguments?.getString("id").orEmpty(),
-                initialTitle = entry.arguments?.getString("title").orEmpty(),
+                state = screenState,
+                threadId = threadId,
                 forumId = forumId,
                 forumName = forumName,
-                focusPostId = entry.arguments?.getLong("postId")?.takeIf { it > 0 }?.toString(),
+                focusPostId = focusPostId,
                 onBack = navigator::navigateUp,
-                onImage = { url ->
-                    fullImageUrl = url
+                onImage = { data ->
+                    photoViewData = data
                     navigator.navigate(ImageRoute)
                 },
                 onReplies = { postId ->
@@ -212,14 +310,17 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 navArgument("forumName") { type = NavType.StringType; defaultValue = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME },
             ),
         ) { entry ->
+            val threadId = entry.arguments?.getString("threadId").orEmpty()
+            val postId = entry.arguments?.getString("postId").orEmpty()
             FloorRepliesScreen(
                 runtime = runtime,
-                threadId = entry.arguments?.getString("threadId").orEmpty(),
-                postId = entry.arguments?.getString("postId").orEmpty(),
+                state = floorRepliesStates.getOrPut("$threadId:$postId") { FloorRepliesScreenState() },
+                threadId = threadId,
+                postId = postId,
                 forumId = entry.arguments?.getLong("forumId") ?: edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID,
                 forumName = entry.arguments?.getString("forumName").orEmpty(),
                 onBack = navigator::navigateUp,
-                onImage = { url -> fullImageUrl = url; navigator.navigate(ImageRoute) },
+                onImage = { data -> photoViewData = data; navigator.navigate(ImageRoute) },
                 onProfile = ::openProfile,
             )
         }
@@ -227,9 +328,11 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
             "$ProfileRoute/{uid}",
             arguments = listOf(navArgument("uid") { type = NavType.LongType }),
         ) { entry ->
+            val uid = entry.arguments?.getLong("uid") ?: 0
             UserProfileScreen(
                 runtime = runtime,
-                uid = entry.arguments?.getLong("uid") ?: 0,
+                state = profileStates.getOrPut(uid) { UserProfileScreenState() },
+                uid = uid,
                 onBack = navigator::navigateUp,
                 onThread = { post ->
                     openThread(
@@ -244,7 +347,14 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 },
             )
         }
-        composable(ImageRoute) { FullImageScreen(fullImageUrl, navigator::navigateUp) }
+        composable(ImageRoute) {
+            val data = photoViewData
+            if (data == null || data.picItems.isEmpty()) {
+                LaunchedEffect(Unit) { navigator.navigateUp() }
+            } else {
+                FullImageScreen(runtime, data, navigator::navigateUp)
+            }
+        }
     }
 }
 
@@ -253,6 +363,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
 private fun ForumScreen(
     active: Boolean,
     runtime: TiebaRuntime,
+    state: ForumScreenState,
     onSearch: () -> Unit,
     onThread: (ForumThread) -> Unit,
     onProfile: (ForumThread) -> Unit,
@@ -263,38 +374,49 @@ private fun ForumScreen(
     val signedToday = preferences.sign.lastOutcome != SignOutcome.FAILED && isToday(preferences.sign.lastRunAt)
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    var page by rememberSaveable { mutableIntStateOf(1) }
-    var goodOnly by rememberSaveable { mutableStateOf(false) }
-    var threads by remember { mutableStateOf(emptyList<ForumThread>()) }
-    var hasMore by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var sortMenu by remember { mutableStateOf(false) }
 
     fun load(targetPage: Int, append: Boolean) {
-        if (loading) return
+        if (state.loading) return
         scope.launch {
-            loading = true
-            error = null
+            state.loading = true
+            state.error = null
             runCatching {
                 runtime.network.loadForum(
                     targetPage,
                     preferences.reading.forumSort,
-                    goodOnly,
+                    state.goodOnly,
                     runtime.accountDao.get(),
                 )
             }.onSuccess { result ->
-                threads = if (append) (threads + result.threads).distinctBy(ForumThread::id) else result.threads
-                page = targetPage
-                hasMore = result.hasMore
-            }.onFailure { error = it.message ?: "加载失败" }
-            loading = false
+                state.threads = if (append) (state.threads + result.threads).distinctBy(ForumThread::id) else result.threads
+                state.page = targetPage
+                state.hasMore = result.hasMore
+            }.onFailure { state.error = it.message ?: "加载失败" }
+            state.loading = false
         }
     }
 
-    LaunchedEffect(active, goodOnly, preferences.reading.forumSort, refreshKey) {
-        if (active) load(1, false)
+    LaunchedEffect(active, state.goodOnly, preferences.reading.forumSort, refreshKey) {
+        if (!active) return@LaunchedEffect
+        val queryKey = "${state.goodOnly}:${preferences.reading.forumSort}"
+        if (state.queryKey != queryKey || state.threads.isEmpty() || refreshKey > 0) {
+            if (state.queryKey != queryKey) state.listState.scrollToItem(0)
+            state.queryKey = queryKey
+            load(1, false)
+        }
+    }
+
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val layoutInfo = state.listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+            state.hasMore && !state.loading && lastVisible >= layoutInfo.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore) load(state.page + 1, true)
     }
 
     Scaffold(
@@ -346,25 +468,23 @@ private fun ForumScreen(
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
+            state = state.listState,
             contentPadding = PaddingValues(vertical = 8.dp),
         ) {
             item {
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = !goodOnly, onClick = { goodOnly = false }, label = { Text("最新") })
-                    FilterChip(selected = goodOnly, onClick = { goodOnly = true }, label = { Text("精品") })
+                    FilterChip(selected = !state.goodOnly, onClick = { state.goodOnly = false }, label = { Text("最新") })
+                    FilterChip(selected = state.goodOnly, onClick = { state.goodOnly = true }, label = { Text("精品") })
                 }
             }
-            error?.let { message ->
+            state.error?.let { message ->
                 item { ErrorCard(message) { refreshKey++ } }
             }
-            items(threads, key = ForumThread::id) { thread ->
+            items(state.threads, key = ForumThread::id) { thread ->
                 ThreadRow(thread, preferences.reading.showBothNames, onThread, onProfile)
             }
-            if (loading) item { LoadingRow() }
-            if (!loading && threads.isEmpty() && error == null && active) item { Text("暂无帖子") }
-            if (!loading && hasMore) {
-                item { OutlinedButton(onClick = { load(page + 1, true) }, modifier = Modifier.fillMaxWidth()) { Text("加载更多") } }
-            }
+            if (state.loading) item { LoadingRow() }
+            if (!state.loading && state.threads.isEmpty() && state.error == null && active) item { Text("暂无帖子") }
         }
     }
 }
@@ -441,44 +561,57 @@ private fun ThreadRow(
 @Composable
 private fun SearchScreen(
     runtime: TiebaRuntime,
+    state: SearchScreenState,
     onBack: () -> Unit,
     onThread: (ForumThread) -> Unit,
     onProfile: (ForumThread) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var keyword by rememberSaveable { mutableStateOf("") }
-    var page by rememberSaveable { mutableIntStateOf(1) }
-    var result by remember { mutableStateOf(ForumPage(ForumSummary(), emptyList(), 1, false)) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
     fun search(targetPage: Int, append: Boolean) {
-        if (keyword.isBlank() || loading) return
+        val query = if (append) state.submittedKeyword else state.keyword.trim()
+        if (query.isBlank() || state.loading) return
+        if (!append) state.submittedKeyword = query
         scope.launch {
-            loading = true
-            error = null
-            runCatching { runtime.network.search(keyword.trim(), targetPage) }
+            state.loading = true
+            state.error = null
+            runCatching { runtime.network.search(query, targetPage) }
                 .onSuccess { loaded ->
-                    result = if (append) loaded.copy(threads = (result.threads + loaded.threads).distinctBy(ForumThread::id)) else loaded
-                    page = targetPage
-                }.onFailure { error = it.message ?: "搜索失败" }
-            loading = false
+                    state.result = if (append) loaded.copy(threads = (state.result.threads + loaded.threads).distinctBy(ForumThread::id)) else loaded
+                    state.page = targetPage
+                    if (!append) state.listState.scrollToItem(0)
+                }.onFailure { state.error = it.message ?: "搜索失败" }
+            state.loading = false
         }
+    }
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val layoutInfo = state.listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+            state.result.hasMore && !state.loading && lastVisible >= layoutInfo.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore) search(state.page + 1, true)
     }
     Scaffold(
         contentWindowInsets = TiebaWindowInsets,
         topBar = { TopAppBar(title = { Text("吧内搜索") }, navigationIcon = { BackButton(onBack) }, windowInsets = TiebaWindowInsets) },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding),
+            state = state.listState,
+            contentPadding = PaddingValues(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(keyword, { keyword = it }, label = { Text("搜索 $TARGET_FORUM_DISPLAY_NAME") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(state.keyword, { state.keyword = it }, label = { Text("搜索 $TARGET_FORUM_DISPLAY_NAME") }, singleLine = true, modifier = Modifier.weight(1f))
                     IconButton(onClick = { search(1, false) }) { Icon(Icons.Default.Search, "搜索") }
                 }
             }
-            error?.let { item { ErrorCard(it) { search(1, false) } } }
-            items(result.threads, key = ForumThread::id) { ThreadRow(it, false, onThread, onProfile) }
-            if (loading) item { LoadingRow() }
-            if (!loading && result.hasMore) item { OutlinedButton({ search(page + 1, true) }, Modifier.fillMaxWidth()) { Text("加载更多") } }
+            state.error?.let { item { ErrorCard(it) { search(1, false) } } }
+            items(state.result.threads, key = ForumThread::id) { ThreadRow(it, false, onThread, onProfile) }
+            if (state.loading) item { LoadingRow() }
         }
     }
 }
@@ -487,150 +620,233 @@ private fun SearchScreen(
 @Composable
 private fun ThreadScreen(
     runtime: TiebaRuntime,
+    state: ThreadScreenState,
     threadId: String,
-    initialTitle: String,
     forumId: Long,
     forumName: String,
     focusPostId: String?,
     onBack: () -> Unit,
-    onImage: (String) -> Unit,
+    onImage: (PhotoViewData) -> Unit,
     onReplies: (String) -> Unit,
     onProfile: (Long) -> Unit,
 ) {
     val preferences by runtime.settings.preferences.collectAsStateWithLifecycle(initialValue = edu.ccit.webvpn.feature.tieba.TiebaPreferences())
     val scope = rememberCoroutineScope()
-    var page by rememberSaveable(threadId) { mutableIntStateOf(1) }
-    var pageInput by rememberSaveable(threadId) { mutableStateOf("1") }
-    var title by remember(threadId) { mutableStateOf(initialTitle) }
-    var totalPages by remember(threadId) { mutableIntStateOf(1) }
-    var body by remember(threadId) { mutableStateOf<ThreadFloor?>(null) }
-    var floors by remember(threadId) { mutableStateOf(emptyList<ThreadFloor>()) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableIntStateOf(0) }
-    var sortMenu by remember { mutableStateOf(false) }
 
-    LaunchedEffect(threadId, forumId, forumName, focusPostId, page, preferences.reading.floorSort, preferences.reading.onlyOriginalPoster, refreshKey) {
-        loading = true
-        error = null
-        body = null
-        floors = emptyList()
-        runCatching {
-            runtime.network.loadThread(
-                threadId,
-                page,
-                preferences.reading.floorSort,
-                preferences.reading.onlyOriginalPoster,
-                runtime.accountDao.get(),
-                forumId = forumId,
-                forumName = forumName,
-                focusPostId = focusPostId,
-            )
+    fun loadPage(targetPage: Int, append: Boolean) {
+        if (state.loading) return
+        scope.launch {
+            state.loading = true
+            state.error = null
+            runCatching {
+                runtime.network.loadThread(
+                    threadId,
+                    targetPage,
+                    preferences.reading.floorSort,
+                    preferences.reading.onlyOriginalPoster,
+                    runtime.accountDao.get(),
+                    forumId = forumId,
+                    forumName = forumName,
+                    focusPostId = focusPostId,
+                )
+            }.onSuccess { loaded ->
+                state.title = loaded.title
+                if (!append || state.body == null) state.body = loaded.body
+                state.floors = if (append) {
+                    (state.floors + loaded.floors).distinctBy(ThreadFloor::postId)
+                } else {
+                    loaded.floors
+                }
+                state.totalPages = loaded.totalPages
+                state.replyCount = loaded.replyCount
+                state.page = targetPage
+            }.onFailure { state.error = it.message ?: "帖子加载失败" }
+            state.loading = false
         }
-            .onSuccess {
-                title = it.title
-                body = it.body
-                floors = it.floors
-                totalPages = it.totalPages
-                pageInput = page.toString()
-            }.onFailure { error = it.message ?: "帖子加载失败" }
-        loading = false
+    }
+
+    val queryKey = "$threadId:$forumId:$forumName:$focusPostId:${preferences.reading.floorSort}:${preferences.reading.onlyOriginalPoster}"
+    LaunchedEffect(queryKey, refreshKey) {
+        if (state.queryKey != queryKey) {
+            state.queryKey = queryKey
+            state.page = 0
+            state.totalPages = 1
+            state.body = null
+            state.floors = emptyList()
+            state.listState.scrollToItem(0)
+        }
+        if (state.page == 0 || refreshKey > 0) loadPage(1, false)
+    }
+
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val layoutInfo = state.listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+            !state.loading && state.error == null && state.page in 1 until state.totalPages &&
+                lastVisible >= layoutInfo.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore) loadPage(state.page + 1, true)
     }
 
     Scaffold(contentWindowInsets = TiebaWindowInsets, containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(
             windowInsets = TiebaWindowInsets,
-            title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            title = { ThreadTopBarTitle() },
             navigationIcon = { BackButton(onBack) },
             actions = {
-                Box {
-                    IconButton({ sortMenu = true }) { Icon(Icons.Default.Tune, "阅读偏好") }
-                    DropdownMenu(sortMenu, { sortMenu = false }) {
-                        FloorSort.entries.forEach { sort ->
-                            DropdownMenuItem(
-                                text = { Text("${sort.label()}${if (sort == preferences.reading.floorSort) " ✓" else ""}") },
-                                onClick = { sortMenu = false; scope.launch { runtime.settings.setFloorSort(sort) } },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text(if (preferences.reading.onlyOriginalPoster) "显示全部楼层" else "只看楼主") },
-                            onClick = { sortMenu = false; scope.launch { runtime.settings.setOnlyOriginalPoster(!preferences.reading.onlyOriginalPoster) } },
-                        )
+                if (state.listState.canScrollBackward) {
+                    IconButton({ scope.launch { state.listState.animateScrollToItem(0) } }) {
+                        Icon(Icons.Default.VerticalAlignTop, "回到顶部")
                     }
                 }
-                IconButton({ refreshKey++ }) { Icon(Icons.Default.Refresh, "刷新") }
             },
         )
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
-            if (loading) {
-                CircularProgressIndicator(Modifier.align(Alignment.Center))
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                ) {
-                    error?.let { item { ErrorCard(it) { refreshKey++ } } }
-                    body?.let { firstPost ->
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                state = state.listState,
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
+                    state.error?.let { item { ErrorCard(it) { refreshKey++ } } }
+                    state.body?.let { firstPost ->
                         item(key = "thread_body", contentType = "thread_body") {
                             Column {
-                                Text(
-                                    "正文",
-                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold,
-                                )
                                 FloorBody(
                                     floor = firstPost,
+                                    threadId = threadId,
+                                    forumId = forumId,
                                     showBothNames = preferences.reading.showBothNames,
+                                    title = state.title,
+                                    forumName = forumName,
+                                    seeLz = preferences.reading.onlyOriginalPoster,
+                                    isOriginalPost = true,
                                     onImage = onImage,
                                     onReplies = { onReplies(firstPost.postId) },
                                     onProfile = onProfile,
                                 )
-                                HorizontalDivider(thickness = 3.dp)
-                                Text(
-                                    "回复",
-                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
+                                HorizontalDivider(
+                                    Modifier.padding(horizontal = 16.dp),
+                                    thickness = 2.dp,
+                                )
+                                ThreadReplyHeader(
+                                    replyCount = state.replyCount,
+                                    sort = preferences.reading.floorSort,
+                                    onlyOriginalPoster = preferences.reading.onlyOriginalPoster,
+                                    onToggleOriginalPoster = {
+                                        scope.launch {
+                                            runtime.settings.setOnlyOriginalPoster(!preferences.reading.onlyOriginalPoster)
+                                        }
+                                    },
+                                    onSort = { sort -> scope.launch { runtime.settings.setFloorSort(sort) } },
                                 )
                             }
                         }
                     }
-                    items(floors, key = ThreadFloor::postId, contentType = { "floor" }) { floor ->
+                    items(state.floors, key = ThreadFloor::postId, contentType = { "floor" }) { floor ->
                         FloorBody(
                             floor = floor,
+                            threadId = threadId,
+                            forumId = forumId,
                             showBothNames = preferences.reading.showBothNames,
+                            forumName = forumName,
+                            seeLz = preferences.reading.onlyOriginalPoster,
                             onImage = onImage,
                             onReplies = { onReplies(floor.postId) },
                             onProfile = onProfile,
                         )
                     }
-                    if (floors.isEmpty() && error == null) item { Text("本页暂无回复", Modifier.padding(16.dp)) }
-                    if (error == null) {
-                        item {
-                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                    OutlinedButton({ if (page > 1) page-- }, enabled = page > 1) { Text("上一页") }
-                                    Text("第 $page / $totalPages 页", style = MaterialTheme.typography.labelLarge)
-                                    OutlinedButton({ if (page < totalPages) page++ }, enabled = page < totalPages) { Text("下一页") }
-                                }
-                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedTextField(pageInput, { pageInput = it.filter(Char::isDigit) }, modifier = Modifier.weight(1f), singleLine = true, label = { Text("输入页码") })
-                                    Button({ page = pageInput.toIntOrNull()?.coerceIn(1, totalPages) ?: page }) { Text("跳转") }
-                                }
-                            }
-                        }
+                    if (state.loading) item(key = "thread_loading") { LoadingRow() }
+                    if (!state.loading && state.page > 0 && state.floors.isEmpty() && state.error == null) {
+                        item { Text("暂无回复", Modifier.padding(16.dp)) }
                     }
                 }
-            }
         }
     }
 }
 
 @Composable
-private fun FloorHeader(floor: ThreadFloor, showBothNames: Boolean, onProfile: () -> Unit) {
+private fun ThreadTopBarTitle() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            shape = MaterialTheme.shapes.small,
+        ) {
+            Icon(
+                imageVector = Icons.Default.School,
+                contentDescription = null,
+                modifier = Modifier.padding(7.dp).size(19.dp),
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = "长春工程学院",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Text(
+                text = "校园贴吧",
+                style = MaterialTheme.typography.labelSmall,
+                color = CcitColors.InkMuted,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThreadReplyHeader(
+    replyCount: Int,
+    sort: FloorSort,
+    onlyOriginalPoster: Boolean,
+    onToggleOriginalPoster: () -> Unit,
+    onSort: (FloorSort) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("回复 $replyCount", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        VerticalDivider(Modifier.height(24.dp).padding(horizontal = 10.dp))
+        Text(
+            "只看楼主",
+            Modifier.clickable(onClick = onToggleOriginalPoster),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (onlyOriginalPoster) MaterialTheme.colorScheme.primary else CcitColors.InkMuted,
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            "正序",
+            Modifier.clickable { onSort(FloorSort.ASCENDING) },
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (sort == FloorSort.ASCENDING) FontWeight.Bold else FontWeight.Normal,
+            color = if (sort == FloorSort.ASCENDING) MaterialTheme.colorScheme.onSurface else CcitColors.InkMuted,
+        )
+        VerticalDivider(Modifier.height(24.dp).padding(horizontal = 10.dp))
+        Text(
+            "倒序",
+            Modifier.clickable { onSort(FloorSort.DESCENDING) },
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (sort == FloorSort.DESCENDING) FontWeight.Bold else FontWeight.Normal,
+            color = if (sort == FloorSort.DESCENDING) MaterialTheme.colorScheme.onSurface else CcitColors.InkMuted,
+        )
+    }
+}
+
+@Composable
+private fun FloorHeader(
+    floor: ThreadFloor,
+    showBothNames: Boolean,
+    forumName: String,
+    isOriginalPost: Boolean,
+    onProfile: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -652,11 +868,21 @@ private fun FloorHeader(floor: ThreadFloor, showBothNames: Boolean, onProfile: (
             Text(
                 listOfNotNull(
                     floor.time.takeIf(String::isNotBlank),
-                    "第 ${floor.floor} 楼",
+                    "第 ${floor.floor} 楼".takeUnless { isOriginalPost },
+                    forumName.takeIf(String::isNotBlank)?.let { "来自${it.removeSuffix("吧")}" },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.labelSmall,
                 color = CcitColors.InkMuted,
             )
+        }
+        if (isOriginalPost) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                shape = MaterialTheme.shapes.extraSmall,
+            ) {
+                Text("楼主", Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }
@@ -664,22 +890,41 @@ private fun FloorHeader(floor: ThreadFloor, showBothNames: Boolean, onProfile: (
 @Composable
 private fun FloorBody(
     floor: ThreadFloor,
+    threadId: String,
+    forumId: Long,
     showBothNames: Boolean,
-    onImage: (String) -> Unit,
+    title: String? = null,
+    forumName: String = "",
+    seeLz: Boolean = false,
+    isOriginalPost: Boolean = false,
+    onImage: (PhotoViewData) -> Unit,
     onReplies: () -> Unit,
     onProfile: (Long) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
-        FloorHeader(floor, showBothNames) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp)) {
+        FloorHeader(floor, showBothNames, forumName, isOriginalPost) {
             if (floor.authorId > 0) onProfile(floor.authorId)
         }
+        val contentIndent = if (isOriginalPost) 0.dp else 46.dp
         Column(
-            Modifier.fillMaxWidth().padding(start = 46.dp, top = 10.dp),
+            Modifier.fillMaxWidth().padding(start = contentIndent, top = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            title?.takeIf(String::isNotBlank)?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             TiebaContentBody(
                 content = floor.richContent,
                 fallbackText = floor.content,
+                threadId = threadId.toLongOrNull() ?: 0,
+                postId = floor.postId.toLongOrNull() ?: 0,
+                forumId = forumId,
+                forumName = forumName,
+                seeLz = seeLz,
                 onImage = onImage,
             )
             floor.videoUrls
@@ -716,47 +961,70 @@ private fun FloorBody(
             }
         }
     }
-    HorizontalDivider(Modifier.padding(start = 62.dp), color = MaterialTheme.colorScheme.outlineVariant)
+    if (!isOriginalPost) {
+        HorizontalDivider(Modifier.padding(start = 62.dp), color = MaterialTheme.colorScheme.outlineVariant)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FloorRepliesScreen(
     runtime: TiebaRuntime,
+    state: FloorRepliesScreenState,
     threadId: String,
     postId: String,
     forumId: Long,
     forumName: String,
     onBack: () -> Unit,
-    onImage: (String) -> Unit,
+    onImage: (PhotoViewData) -> Unit,
     onProfile: (Long) -> Unit,
 ) {
-    var page by rememberSaveable(threadId, postId) { mutableIntStateOf(1) }
-    var totalPages by remember(threadId, postId) { mutableIntStateOf(1) }
-    var replies by remember(threadId, postId) { mutableStateOf(emptyList<edu.ccit.webvpn.feature.tieba.FloorReply>()) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(threadId, postId, page, refreshKey) {
-        loading = true
-        error = null
-        runCatching {
-            runtime.network.loadFloorReplies(
-                threadId,
-                postId,
-                page,
-                account = runtime.accountDao.get(),
-                forumId = forumId,
-                forumName = forumName,
-            )
-        }
-            .onSuccess {
-                replies = it.replies
-                totalPages = it.totalPages
+    fun loadPage(targetPage: Int, append: Boolean) {
+        if (state.loading) return
+        scope.launch {
+            state.loading = true
+            state.error = null
+            runCatching {
+                runtime.network.loadFloorReplies(
+                    threadId,
+                    postId,
+                    targetPage,
+                    account = runtime.accountDao.get(),
+                    forumId = forumId,
+                    forumName = forumName,
+                )
             }
-            .onFailure { error = it.message ?: "帖子数据异常" }
-        loading = false
+                .onSuccess { loaded ->
+                    state.replies = if (append) {
+                        (state.replies + loaded.replies).distinctBy { it.id.ifBlank { "${it.authorId}:${it.time}:${it.content}" } }
+                    } else {
+                        loaded.replies
+                    }
+                    state.page = targetPage
+                    state.totalPages = loaded.totalPages
+                }
+                .onFailure { state.error = it.message ?: "帖子数据异常" }
+            state.loading = false
+        }
+    }
+
+    LaunchedEffect(threadId, postId, refreshKey) {
+        if (refreshKey > 0) state.listState.scrollToItem(0)
+        if (state.page == 0 || refreshKey > 0) loadPage(1, false)
+    }
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val layoutInfo = state.listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+            !state.loading && state.error == null && state.page in 1 until state.totalPages &&
+                lastVisible >= layoutInfo.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore) loadPage(state.page + 1, true)
     }
 
     Scaffold(
@@ -772,27 +1040,26 @@ private fun FloorRepliesScreen(
     ) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
+            state = state.listState,
             contentPadding = PaddingValues(vertical = 4.dp),
         ) {
-            error?.let { item { ErrorCard(it) { refreshKey++ } } }
+            state.error?.let { item { ErrorCard(it) { refreshKey++ } } }
             items(
-                replies,
+                state.replies,
                 key = { it.id.ifBlank { "${it.authorName}:${it.time}:${it.content.hashCode()}" } },
                 contentType = { "floor_reply" },
             ) { reply ->
-                FloorReplyItem(reply, onImage, onProfile)
+                FloorReplyItem(
+                    reply = reply,
+                    threadId = threadId.toLongOrNull() ?: 0,
+                    forumId = forumId,
+                    forumName = forumName,
+                    onImage = onImage,
+                    onProfile = onProfile,
+                )
             }
-            if (loading) item { LoadingRow() }
-            if (!loading && replies.isEmpty() && error == null) item { Text("暂无回复") }
-            if (totalPages > 1) {
-                item {
-                    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        OutlinedButton({ page-- }, enabled = page > 1) { Text("上一页") }
-                        Text("第 $page / $totalPages 页", modifier = Modifier.align(Alignment.CenterVertically))
-                        OutlinedButton({ page++ }, enabled = page < totalPages) { Text("下一页") }
-                    }
-                }
-            }
+            if (state.loading) item { LoadingRow() }
+            if (!state.loading && state.replies.isEmpty() && state.error == null) item { Text("暂无回复") }
         }
     }
 }
@@ -800,7 +1067,10 @@ private fun FloorRepliesScreen(
 @Composable
 private fun FloorReplyItem(
     reply: edu.ccit.webvpn.feature.tieba.FloorReply,
-    onImage: (String) -> Unit,
+    threadId: Long,
+    forumId: Long,
+    forumName: String,
+    onImage: (PhotoViewData) -> Unit,
     onProfile: (Long) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -826,6 +1096,11 @@ private fun FloorReplyItem(
         TiebaContentBody(
             content = reply.richContent,
             fallbackText = reply.content,
+            threadId = threadId,
+            postId = reply.id.toLongOrNull() ?: 0,
+            forumId = forumId,
+            forumName = forumName,
+            seeLz = false,
             onImage = onImage,
             modifier = Modifier.fillMaxWidth().padding(start = 46.dp, top = 8.dp),
         )
@@ -837,7 +1112,12 @@ private fun FloorReplyItem(
 private fun TiebaContentBody(
     content: List<TiebaContent>,
     fallbackText: String,
-    onImage: (String) -> Unit,
+    threadId: Long,
+    postId: Long,
+    forumId: Long,
+    forumName: String,
+    seeLz: Boolean,
+    onImage: (PhotoViewData) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val effectiveContent = content.ifEmpty {
@@ -878,8 +1158,36 @@ private fun TiebaContentBody(
                         contentDescription = "帖子图片",
                         modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp, max = 520.dp)
                             .aspectRatio(ratio).clip(MaterialTheme.shapes.small),
-                        contentScale = ContentScale.Crop,
-                        onClick = { onImage(media.originalUrl) },
+                        contentScale = ContentScale.Fit,
+                        onClick = {
+                            onImage(
+                                PhotoViewData(
+                                    data = LoadPicPageData(
+                                        forumId = forumId,
+                                        forumName = forumName,
+                                        seeLz = seeLz,
+                                        objType = "pb",
+                                        picId = media.picId.ifBlank {
+                                            media.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
+                                        },
+                                        picIndex = 1,
+                                        threadId = threadId,
+                                        postId = postId,
+                                        originUrl = media.originalUrl,
+                                    ),
+                                    picItems = listOf(
+                                        PicItem(
+                                            picId = media.picId.ifBlank {
+                                                media.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
+                                            },
+                                            picIndex = 1,
+                                            originUrl = media.originalUrl,
+                                            postId = postId,
+                                        ),
+                                    ),
+                                ),
+                            )
+                        },
                     )
                 }
                 is TiebaContent.Video -> VideoPlayer(media.url)
@@ -1013,85 +1321,110 @@ private enum class UserProfileTab(val label: String) { Threads("主题"), Replie
 @Composable
 private fun UserProfileScreen(
     runtime: TiebaRuntime,
+    state: UserProfileScreenState,
     uid: Long,
     onBack: () -> Unit,
     onThread: (TiebaUserPost) -> Unit,
 ) {
     val account by runtime.account.collectAsStateWithLifecycle()
-    var profile by remember(uid) { mutableStateOf<TiebaUserProfile?>(null) }
-    var profileLoading by remember(uid) { mutableStateOf(true) }
-    var profileError by remember(uid) { mutableStateOf<String?>(null) }
-    var selectedTab by rememberSaveable(uid) { mutableStateOf(UserProfileTab.Threads) }
-    var page by remember(uid, selectedTab) { mutableIntStateOf(1) }
-    var posts by remember(uid, selectedTab) { mutableStateOf(emptyList<TiebaUserPost>()) }
-    var postsLoading by remember(uid, selectedTab) { mutableStateOf(false) }
-    var postsError by remember(uid, selectedTab) { mutableStateOf<String?>(null) }
-    var hasMore by remember(uid, selectedTab) { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val tabState = state.tabStates.getValue(state.selectedTab)
 
-    LaunchedEffect(account?.uid, uid, selectedTab) {
-        if (selectedTab == UserProfileTab.Replies && account?.uid != uid) {
-            selectedTab = UserProfileTab.Threads
+    LaunchedEffect(account?.uid, uid, state.selectedTab) {
+        if (state.selectedTab == UserProfileTab.Replies && account?.uid != uid) {
+            state.selectedTab = UserProfileTab.Threads
         }
     }
 
     LaunchedEffect(uid, refreshKey) {
-        profileLoading = true
-        profileError = null
+        if (state.profile != null && refreshKey == 0) return@LaunchedEffect
+        state.profileLoading = true
+        state.profileError = null
         runCatching { runtime.network.loadUserProfile(uid, runtime.accountDao.get()) }
-            .onSuccess { profile = it }
-            .onFailure { profileError = it.message ?: "用户资料加载失败" }
-        profileLoading = false
+            .onSuccess { state.profile = it }
+            .onFailure { state.profileError = it.message ?: "用户资料加载失败" }
+        state.profileLoading = false
     }
 
     fun loadPosts(targetPage: Int, append: Boolean) {
-        if (postsLoading || selectedTab == UserProfileTab.Forums) return
+        val targetTab = state.selectedTab
+        val targetState = state.tabStates.getValue(targetTab)
+        if (targetState.loading || targetTab == UserProfileTab.Forums) return
         scope.launch {
-            postsLoading = true
-            postsError = null
+            targetState.loading = true
+            targetState.error = null
             runCatching {
                 runtime.network.loadUserPosts(
                     uid = uid,
                     page = targetPage,
-                    isThread = selectedTab == UserProfileTab.Threads,
+                    isThread = targetTab == UserProfileTab.Threads,
                     account = runtime.accountDao.get(),
                 )
             }.onSuccess { result ->
-                posts = if (append) (posts + result.posts).distinctBy(TiebaUserPost::key) else result.posts
-                page = targetPage
-                hasMore = result.hasMore
-            }.onFailure { postsError = it.message ?: "用户帖子加载失败" }
-            postsLoading = false
+                targetState.posts = if (append) (targetState.posts + result.posts).distinctBy(TiebaUserPost::key) else result.posts
+                targetState.page = targetPage
+                targetState.hasMore = result.hasMore
+            }.onFailure { targetState.error = it.message ?: "用户帖子加载失败" }
+            targetState.loading = false
         }
     }
 
-    LaunchedEffect(uid, selectedTab, profile?.uid) {
-        posts = emptyList()
-        page = 1
-        hasMore = false
-        if (profile != null && selectedTab != UserProfileTab.Forums) loadPosts(1, false)
+    LaunchedEffect(uid, state.selectedTab, state.profile?.uid) {
+        if (state.profile != null && state.selectedTab != UserProfileTab.Forums && tabState.page == 0) {
+            loadPosts(1, false)
+        }
+    }
+    val shouldLoadMore by remember(state.selectedTab) {
+        derivedStateOf {
+            val layoutInfo = tabState.listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+            tabState.hasMore && !tabState.loading && lastVisible >= layoutInfo.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(shouldLoadMore, state.selectedTab) {
+        if (shouldLoadMore) loadPosts(tabState.page + 1, true)
     }
 
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         contentWindowInsets = TiebaWindowInsets,
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { TopAppBar(title = { Text(profile?.nickname ?: "用户资料") }, navigationIcon = { BackButton(onBack) }, windowInsets = TiebaWindowInsets) },
+        topBar = {
+            val user = state.profile
+            if (user == null) {
+                TopAppBar(
+                    title = { Text("用户资料") },
+                    navigationIcon = { BackButton(onBack) },
+                    windowInsets = TiebaWindowInsets,
+                )
+            } else {
+                UserProfileTopAppBar(
+                    user = user,
+                    onBack = onBack,
+                    onRefresh = { refreshKey++ },
+                    scrollBehavior = scrollBehavior,
+                )
+            }
+        },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
             when {
-                profileLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                profileError != null -> ErrorCard(profileError.orEmpty()) { refreshKey++ }
-                profile != null -> {
-                    val user = requireNotNull(profile)
+                state.profileLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.profileError != null -> ErrorCard(state.profileError.orEmpty()) { refreshKey++ }
+                state.profile != null -> {
+                    val user = requireNotNull(state.profile)
                     val tabs = buildList {
                         add(UserProfileTab.Threads)
                         if (account?.uid == uid) add(UserProfileTab.Replies)
                         add(UserProfileTab.Forums)
                     }
                     Column(Modifier.fillMaxSize()) {
-                        UserProfileHeader(user)
-                        PrimaryTabRow(selectedTabIndex = tabs.indexOf(selectedTab).coerceAtLeast(0)) {
+                        PrimaryTabRow(
+                            selectedTabIndex = tabs.indexOf(state.selectedTab).coerceAtLeast(0),
+                            containerColor = MaterialTheme.colorScheme.background,
+                        ) {
                             tabs.forEach { tab ->
                                 val count = when (tab) {
                                     UserProfileTab.Threads -> user.threadCount
@@ -1099,25 +1432,25 @@ private fun UserProfileScreen(
                                     UserProfileTab.Forums -> user.forumCount
                                 }
                                 Tab(
-                                    selected = selectedTab == tab,
-                                    onClick = { selectedTab = tab },
+                                    selected = state.selectedTab == tab,
+                                    onClick = { state.selectedTab = tab },
                                     text = { Text("${tab.label} $count") },
                                 )
                             }
                         }
-                        if (selectedTab == UserProfileTab.Forums) {
-                            UserForumList(user, Modifier.weight(1f))
+                        if (state.selectedTab == UserProfileTab.Forums) {
+                            UserForumList(user, Modifier.weight(1f), tabState.listState)
                         } else {
-                            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                                postsError?.let { message -> item { ErrorCard(message) { loadPosts(1, false) } } }
-                                items(posts, key = TiebaUserPost::key, contentType = { "user_post" }) { post ->
-                                    UserPostItem(post, onThread)
+                            LazyColumn(
+                                Modifier.weight(1f).fillMaxWidth(),
+                                state = tabState.listState,
+                            ) {
+                                tabState.error?.let { message -> item { ErrorCard(message) { loadPosts(1, false) } } }
+                                items(tabState.posts, key = TiebaUserPost::key, contentType = { "user_post" }) { post ->
+                                    UserPostItem(post, user, onThread)
                                 }
-                                if (postsLoading) item { LoadingRow() }
-                                if (!postsLoading && posts.isEmpty() && postsError == null) item { Text("暂无内容", Modifier.padding(20.dp)) }
-                                if (!postsLoading && hasMore) {
-                                    item { OutlinedButton({ loadPosts(page + 1, true) }, Modifier.fillMaxWidth().padding(16.dp)) { Text("加载更多") } }
-                                }
+                                if (tabState.loading) item { LoadingRow() }
+                                if (!tabState.loading && tabState.posts.isEmpty() && tabState.error == null) item { Text("暂无内容", Modifier.padding(20.dp)) }
                             }
                         }
                     }
@@ -1128,88 +1461,206 @@ private fun UserProfileScreen(
 }
 
 @Composable
-private fun UserProfileHeader(user: TiebaUserProfile) {
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+private fun UserProfileTopAppBar(
+    user: TiebaUserProfile,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    scrollBehavior: TopAppBarScrollBehavior,
+) {
+    val density = LocalDensity.current
+    val expandedHeight = 328.dp
+    val collapsedHeight = 64.dp
+    SideEffect {
+        scrollBehavior.state.heightOffsetLimit = with(density) {
+            -(expandedHeight - collapsedHeight).toPx()
+        }
+    }
+
+    val collapseFraction = scrollBehavior.state.collapsedFraction.coerceIn(0f, 1f)
+    val detailAlpha = (1f - collapseFraction * 2.2f).coerceIn(0f, 1f)
+    val expandedTitleAlpha = (1f - collapseFraction * 2f).coerceIn(0f, 1f)
+    val collapsedTitleAlpha = ((collapseFraction - 0.45f) / 0.55f).coerceIn(0f, 1f)
+    val currentHeight = lerp(expandedHeight.value, collapsedHeight.value, collapseFraction).dp
+    val avatarSize = lerp(96f, 36f, collapseFraction).dp
+    val avatarStart = lerp(18f, 60f, collapseFraction).dp
+    val avatarTop = lerp(70f, 14f, collapseFraction).dp
+
+    Box(
+        Modifier.fillMaxWidth().height(currentHeight).clipToBounds()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        TiebaAsyncImage(
+            url = user.avatarUrl,
+            contentDescription = "${user.nickname}的头像",
+            modifier = Modifier.offset(avatarStart, avatarTop).size(avatarSize).clip(CircleShape),
+            contentScale = ContentScale.Crop,
+        )
+        Text(
+            text = user.nickname.ifBlank { user.username },
+            modifier = Modifier.fillMaxWidth().padding(start = 130.dp, end = 16.dp, top = 68.dp)
+                .graphicsLayer { alpha = expandedTitleAlpha },
+            maxLines = 2,
+            fontSize = 24.sp,
+            lineHeight = 28.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            text = user.nickname.ifBlank { user.username },
+            modifier = Modifier.fillMaxWidth().padding(start = 104.dp, end = 56.dp, top = 17.dp)
+                .graphicsLayer { alpha = collapsedTitleAlpha },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Medium,
+        )
+
+        Column(
+            Modifier.fillMaxWidth().padding(start = 130.dp, end = 16.dp, top = 132.dp)
+                .graphicsLayer { alpha = detailAlpha },
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (user.nickname != user.username && user.username.isNotBlank()) {
+                Text("(${user.username})", style = MaterialTheme.typography.titleMedium)
+            }
+            Row(
+                Modifier.fillMaxWidth().height(54.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                UserStat("关注", user.followingCount.toString(), Modifier.weight(1f))
+                VerticalDivider(Modifier.height(34.dp))
+                UserStat("粉丝", user.fansCount.toString(), Modifier.weight(1f))
+                VerticalDivider(Modifier.height(34.dp))
+                UserStat("获赞", user.agreeCount.toString(), Modifier.weight(1f))
+                VerticalDivider(Modifier.height(34.dp))
+                UserStat("吧龄", user.tiebaAge.takeIf(String::isNotBlank)?.let { "$it 年" } ?: "-", Modifier.weight(1.15f))
+            }
+        }
+
+        Column(
+            Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 224.dp)
+                .graphicsLayer { alpha = detailAlpha },
+            verticalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            Text(
+                user.intro.ifBlank { "这个人很低调，暂时没有个人简介。" },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                ProfileInfoChip(user.sex, emphasized = true)
+                ProfileInfoChip("ID: ${user.uid}")
+                if (user.address.isNotBlank()) ProfileInfoChip("IP 属地：${user.address}")
+                if (user.isOfficial) ProfileInfoChip("官方账号", emphasized = true)
+            }
+        }
+
+        Box(Modifier.align(Alignment.TopStart).height(collapsedHeight), contentAlignment = Alignment.CenterStart) {
+            BackButton(onBack)
+        }
+        Box(Modifier.align(Alignment.TopEnd).height(collapsedHeight), contentAlignment = Alignment.CenterEnd) {
+            IconButton(onRefresh) { Icon(Icons.Default.Refresh, "刷新") }
+        }
+    }
+}
+
+@Composable
+private fun ProfileInfoChip(text: String, emphasized: Boolean = false) {
+    Surface(
+        color = if (emphasized) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = if (emphasized) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = CircleShape,
+    ) {
+        Text(text, Modifier.padding(horizontal = 11.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun UserStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = CcitColors.InkMuted)
+        Text(value, fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
+@Composable
+private fun UserPostItem(post: TiebaUserPost, user: TiebaUserProfile, onClick: (TiebaUserPost) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clickable { onClick(post) }.padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             TiebaAsyncImage(
                 user.avatarUrl,
                 null,
-                Modifier.size(80.dp).clip(CircleShape),
+                Modifier.size(40.dp).clip(CircleShape),
                 contentScale = ContentScale.Crop,
             )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(user.nickname.ifBlank { user.username }, style = MaterialTheme.typography.headlineSmall)
-                    if (user.isOfficial) AssistChip(onClick = {}, label = { Text("官方") })
-                }
-                if (user.nickname != user.username && user.username.isNotBlank()) {
-                    Text("用户名：${user.username}", color = CcitColors.InkMuted)
-                }
-                if (user.intro.isNotBlank()) Text(user.intro, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(9.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(user.nickname.ifBlank { user.username }, style = MaterialTheme.typography.labelLarge)
+                Text(post.time, style = MaterialTheme.typography.labelSmall, color = CcitColors.InkMuted)
             }
-        }
-        Row(Modifier.fillMaxWidth()) {
-            UserStat("关注", user.followingCount, Modifier.weight(1f))
-            UserStat("粉丝", user.fansCount, Modifier.weight(1f))
-            UserStat("获赞", user.agreeCount, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(onClick = {}, label = { Text(user.sex) })
-            if (user.tiebaAge.isNotBlank()) AssistChip(onClick = {}, label = { Text("吧龄 ${user.tiebaAge} 年") })
-            if (user.address.isNotBlank()) AssistChip(onClick = {}, label = { Text(user.address) })
-        }
-    }
-}
-
-@Composable
-private fun UserStat(label: String, value: Int, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value.toString(), fontWeight = FontWeight.Bold)
-        Text(label, style = MaterialTheme.typography.labelMedium, color = CcitColors.InkMuted)
-    }
-}
-
-@Composable
-private fun UserPostItem(post: TiebaUserPost, onClick: (TiebaUserPost) -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable { onClick(post) }.padding(horizontal = 16.dp, vertical = 14.dp)) {
-        Text(post.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (post.excerpt.isNotBlank()) {
-            Text(post.excerpt, Modifier.padding(top = 8.dp), maxLines = 5, overflow = TextOverflow.Ellipsis)
-        }
-        if (post.imageUrls.isNotEmpty()) {
-            val images = post.imageUrls.take(3)
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                images.forEach { url ->
-                    TiebaAsyncImage(
-                        url,
-                        null,
-                        Modifier.weight(1f).height(88.dp).clip(MaterialTheme.shapes.small),
-                        contentScale = ContentScale.Crop,
+            if (post.forumName.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = MaterialTheme.shapes.extraSmall,
+                ) {
+                    Text(
+                        "${post.forumName.removeSuffix("吧")}吧",
+                        Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 }
             }
         }
         Text(
-            listOf(post.forumName.takeIf(String::isNotBlank)?.let { "$it 吧" }, post.time.takeIf(String::isNotBlank))
-                .filterNotNull().joinToString(" · "),
-            Modifier.padding(top = 8.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = CcitColors.InkMuted,
+            post.title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
+        if (post.excerpt.isNotBlank()) {
+            Text(post.excerpt, maxLines = 5, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge)
+        }
+        if (post.imageUrls.isNotEmpty()) {
+            val images = post.imageUrls.take(3)
+            if (images.size == 1) {
+                TiebaAsyncImage(
+                    images.single(),
+                    null,
+                    Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 460.dp).clip(MaterialTheme.shapes.small),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    images.forEach { url ->
+                        TiebaAsyncImage(
+                            url,
+                            null,
+                            Modifier.weight(1f).height(104.dp).clip(MaterialTheme.shapes.small),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                }
+            }
+        }
     }
-    HorizontalDivider()
+    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
 }
 
 @Composable
-private fun UserForumList(user: TiebaUserProfile, modifier: Modifier = Modifier) {
+private fun UserForumList(
+    user: TiebaUserProfile,
+    modifier: Modifier,
+    listState: LazyListState,
+) {
     when {
         user.followedForumsPrivate -> Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Text("该用户隐藏了关注的吧") }
         user.followedForums.isEmpty() -> Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Text("暂无公开的关注吧") }
-        else -> LazyColumn(modifier.fillMaxWidth()) {
+        else -> LazyColumn(modifier.fillMaxWidth(), state = listState) {
             items(user.followedForums, key = { it.id }) { forum ->
                 ListItem(
                     headlineContent = { Text("${forum.name}吧") },
@@ -1222,25 +1673,126 @@ private fun UserForumList(user: TiebaUserProfile, modifier: Modifier = Modifier)
 }
 
 @Composable
-private fun FullImageScreen(url: String, onBack: () -> Unit) {
+private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: () -> Unit) {
+    val item = data.picItems.getOrNull(data.index.coerceIn(data.picItems.indices)) ?: return
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
+    var retry by remember(item.picId) { mutableIntStateOf(0) }
+    var resolvedUrl by remember(item.picId, retry) { mutableStateOf<String?>(null) }
+    var resolving by remember(item.picId, retry) { mutableStateOf(true) }
+    var loading by remember(item.picId, retry) { mutableStateOf(false) }
+    var failed by remember(item.picId, retry) { mutableStateOf(false) }
+    var dimensions by remember(item.picId, retry) { mutableStateOf<Pair<Int, Int>?>(null) }
+    val context = LocalContext.current
+    LaunchedEffect(data.data, item.picId, retry) {
+        resolving = true
+        loading = false
+        failed = false
+        dimensions = null
+        val refreshed = data.data?.let { requestData ->
+            runCatching { runtime.network.resolveOriginalImage(requestData, runtime.accountDao.get()) }
+                .getOrNull()
+        }
+        // A signed URL from the protobuf response remains a safe fallback when picpage is
+        // temporarily unavailable. Never fall back to an unsigned item URL: Baidu serves the
+        // 238 x 238 Tieba-logo placeholder with HTTP 200 for that URL.
+        resolvedUrl = refreshed?.takeIf(::isAuthorizedTiebaImageUrl)
+            ?: item.originUrl.takeIf { data.data == null && isAuthorizedTiebaImageUrl(it) }
+        resolving = false
+        if (resolvedUrl == null) failed = true
+    }
+    val request = remember(resolvedUrl, retry) {
+        resolvedUrl?.let { originalUrl ->
+            ImageRequest.Builder(context)
+                .data(originalUrl)
+                .httpHeaders(
+                    NetworkHeaders.Builder()
+                        .set("Referer", "https://tieba.baidu.com/")
+                        .build(),
+                )
+                // TiebaLite's original-image loader does not downsample the source for zooming.
+                .size(SizeResolver.ORIGINAL)
+                .build()
+        }
+    }
     val transform = rememberTransformableState { zoom, pan, _ ->
         scale = (scale * zoom).coerceIn(1f, 6f)
-        offsetX += pan.x
-        offsetY += pan.y
+        if (scale == 1f) {
+            offsetX = 0f
+            offsetY = 0f
+        } else {
+            offsetX += pan.x
+            offsetY += pan.y
+        }
     }
     BackHandler(onBack = onBack)
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        TiebaAsyncImage(
-            url = url,
-            contentDescription = "原图",
-            modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offsetX; translationY = offsetY }
-                .transformable(transform),
-            contentScale = ContentScale.Fit,
-        )
-        IconButton(onBack, Modifier.align(Alignment.TopStart).padding(8.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        request?.let { originalRequest ->
+            AsyncImage(
+                model = originalRequest,
+                contentDescription = "原图",
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offsetX
+                    translationY = offsetY
+                }.transformable(transform),
+                contentScale = ContentScale.Fit,
+                onLoading = {
+                    loading = true
+                    failed = false
+                },
+                onSuccess = { result ->
+                    loading = false
+                    failed = false
+                    dimensions = result.result.image.width to result.result.image.height
+                },
+                onError = {
+                    loading = false
+                    failed = true
+                },
+            )
+        }
+        if (resolving || loading) {
+            CircularProgressIndicator(color = Color.White)
+        }
+        if (failed) {
+            Surface(
+                color = Color(0xCC202124),
+                contentColor = Color.White,
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Column(
+                    Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Default.ErrorOutline, contentDescription = null)
+                    Text("真实原图加载失败")
+                    Text(
+                        "未使用贴吧返回的占位图",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray,
+                    )
+                    TextButton(onClick = { retry++ }) { Text("重试") }
+                }
+            }
+        }
+        Row(
+            Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x66000000)).padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
+            }
+            Text(
+                dimensions?.let { (width, height) -> "原图 · ${width} × ${height}" }
+                    ?: if (resolving) "正在获取真实原图…" else "正在加载原图…",
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
     }
 }
 

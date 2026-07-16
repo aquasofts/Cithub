@@ -9,6 +9,14 @@ These rules apply to the entire repository.
 - After a successful local build, update `AgentBuild.md` with any newly discovered commands, environment requirements, failures, and fixes that will help the next AI on the same computer. If the file does not exist, create it locally without removing its `.gitignore` entry.
 - Repository-wide rules in this file remain authoritative. Machine-local instructions supplement them and must not be used to weaken required verification or security rules.
 
+## Build output hygiene
+
+- Treat Gradle `build/` trees and the repository-root `.codex-build/` directory as disposable working data, not as APK handoff locations.
+- Before cleaning after a successful build, copy the APKs intended for the user to `artifacts/apk/<YYYY-MM-DD>-<short-purpose>/`, separating `performance/` and `debug/` variants. The repository-root `artifacts/` tree must remain ignored and must never be staged, committed, or uploaded unless the user explicitly requests publication.
+- The default handoff remains the two `performance` flavor APKs. Archive Debug APKs only when they were explicitly requested or were generated for required verification. Always report the exact absolute artifact directory to the user.
+- If an emulator or another process locks `app/build`, do not terminate the user's process without permission. Redirect only the app build to `.codex-build/app`, verify the resulting APKs there, copy the handoff APKs into `artifacts/`, and then remove the temporary redirected build and init script.
+- Before any recursive cleanup, resolve every target to an absolute path and verify that it is a known module `build/` directory or a tool-created `.codex-build/` directory inside this repository. Never delete source directories, `artifacts/`, signing material, or machine-local instructions during build cleanup.
+
 ## Prefer platform solutions
 
 - Prefer stable AndroidX, Jetpack Compose, and Material 3 components over custom navigation, animation, gesture, or lifecycle implementations.

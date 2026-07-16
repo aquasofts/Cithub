@@ -2,6 +2,8 @@
 .kotlin/
 .idea/
 build/
+/.codex-build/
+/artifacts/
 local.properties
 AgentBuild.md
 *.iml
