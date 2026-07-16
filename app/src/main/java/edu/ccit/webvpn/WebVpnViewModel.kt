@@ -1,10 +1,9 @@
 package edu.ccit.webvpn
 
-import android.content.Context
 import android.util.Base64
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
 import edu.ccit.webvpn.core.captcha.CaptchaAutomation
 import edu.ccit.webvpn.core.webvpn.CaptchaData
 import edu.ccit.webvpn.core.webvpn.LocalLoginConfiguration
@@ -21,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class WebVpnUiState(
     val captchaAutofillEnabled: Boolean = false,
@@ -39,7 +39,8 @@ data class WebVpnUiState(
     val message: String? = null,
 )
 
-class WebVpnViewModel(
+@HiltViewModel
+class WebVpnViewModel @Inject constructor(
     private val repository: WebVpnAuthRepository,
     private val credentialStore: WebVpnCredentialStore,
     private val captchaAutomation: CaptchaAutomation,
@@ -395,22 +396,6 @@ class WebVpnViewModel(
         sessionMonitorJob?.cancel()
         captchaAutomation.close()
         super.onCleared()
-    }
-
-    class Factory(
-        private val repository: WebVpnAuthRepository,
-        private val credentialStore: WebVpnCredentialStore,
-        private val context: Context,
-    ) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            require(modelClass.isAssignableFrom(WebVpnViewModel::class.java))
-            return WebVpnViewModel(
-                repository,
-                credentialStore,
-                CaptchaAutomationProvider.get(context),
-            ) as T
-        }
     }
 
     private companion object {

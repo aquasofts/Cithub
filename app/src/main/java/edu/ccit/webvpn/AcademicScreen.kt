@@ -17,12 +17,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
@@ -31,12 +31,9 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,10 +51,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import edu.ccit.webvpn.core.academic.CourseGrade
-import edu.ccit.webvpn.core.ui.WebVpnCard
-import edu.ccit.webvpn.core.ui.WebVpnColors
-import edu.ccit.webvpn.core.ui.WebVpnPrimaryButton
-import edu.ccit.webvpn.core.ui.webVpnTextFieldColors
+import edu.ccit.webvpn.core.ui.CcitCard
+import edu.ccit.webvpn.core.ui.CcitSkeletonBlock
+import edu.ccit.webvpn.core.ui.CcitOutlinedButton
+import edu.ccit.webvpn.core.ui.CcitSelectField
+import edu.ccit.webvpn.core.ui.CcitColors
+import edu.ccit.webvpn.core.ui.CcitPrimaryButton
+import edu.ccit.webvpn.core.ui.ccitTextFieldColors
 
 @Composable
 fun AcademicSection(
@@ -71,17 +71,17 @@ fun AcademicSection(
     onBestOnlyChanged: (Boolean) -> Unit,
     onQueryGrades: () -> Unit,
 ) {
-    WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+    CcitCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.School, contentDescription = null, tint = WebVpnColors.Brown)
+                Icon(Icons.Default.School, contentDescription = null, tint = CcitColors.Brown)
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text("教务系统登录", style = MaterialTheme.typography.titleLarge)
-                    Text("教学一体化服务平台", color = WebVpnColors.InkMuted)
+                    Text("教学一体化服务平台", color = CcitColors.InkMuted)
                 }
             }
 
@@ -107,14 +107,14 @@ fun AcademicSection(
 
     if (state.loggedIn) {
         when {
-            state.loadingGrades -> WebVpnCard(modifier = Modifier.fillMaxWidth()) {
-                AcademicLoading("正在查询成绩…")
+            state.loadingGrades -> CcitCard(modifier = Modifier.fillMaxWidth()) {
+                AcademicGradeSkeleton("正在查询成绩…")
             }
-            state.grades.isEmpty() -> WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+            state.grades.isEmpty() -> CcitCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     "当前筛选条件下没有成绩记录。",
                     modifier = Modifier.padding(18.dp),
-                    color = WebVpnColors.InkMuted,
+                    color = CcitColors.InkMuted,
                 )
             }
             else -> state.grades.forEach { grade -> GradeCard(grade) }
@@ -134,17 +134,17 @@ fun AcademicGradesScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item(key = "grade_filters", contentType = "grade_filters") {
-            WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+            CcitCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.School, contentDescription = null, tint = WebVpnColors.Brown)
+                        Icon(Icons.Default.School, contentDescription = null, tint = CcitColors.Brown)
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text("成绩查询", style = MaterialTheme.typography.titleLarge)
-                            Text("按学期筛选课程成绩", color = WebVpnColors.InkMuted)
+                            Text("按学期筛选课程成绩", color = CcitColors.InkMuted)
                         }
                     }
                     AcademicGradeFilters(state, onSelectTerm, onBestOnlyChanged, onQueryGrades)
@@ -153,16 +153,16 @@ fun AcademicGradesScreen(
         }
         when {
             state.loadingGrades -> item(key = "grade_loading", contentType = "grade_status") {
-                WebVpnCard(modifier = Modifier.fillMaxWidth()) {
-                    AcademicLoading("正在查询成绩…")
+                CcitCard(modifier = Modifier.fillMaxWidth()) {
+                    AcademicGradeSkeleton("正在查询成绩…")
                 }
             }
             state.grades.isEmpty() -> item(key = "grade_empty", contentType = "grade_status") {
-                WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+                CcitCard(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         "当前筛选条件下没有成绩记录。",
                         modifier = Modifier.padding(18.dp),
-                        color = WebVpnColors.InkMuted,
+                        color = CcitColors.InkMuted,
                     )
                 }
             }
@@ -218,7 +218,7 @@ private fun AcademicLoginForm(
     ) {
     Text(
         "WebVPN 已连接，请登录学生端。",
-        color = WebVpnColors.InkMuted,
+        color = CcitColors.InkMuted,
     )
     if (state.savedAccounts.isNotEmpty()) {
         Text("已保存教务账号", style = MaterialTheme.typography.titleMedium)
@@ -227,7 +227,7 @@ private fun AcademicLoginForm(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedButton(
+                CcitOutlinedButton(
                     onClick = { onSelectSavedAccount(account.username) },
                     modifier = Modifier.weight(1f),
                 ) {
@@ -256,16 +256,16 @@ private fun AcademicLoginForm(
         singleLine = true,
         enabled = !usingSavedPassword,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-        colors = webVpnTextFieldColors(),
+        colors = ccitTextFieldColors(),
     )
     if (usingSavedPassword) {
-        WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+        CcitCard(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = WebVpnColors.Success)
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CcitColors.Success)
                     Spacer(Modifier.width(8.dp))
                     Text("已使用本机加密保存的教务密码")
                 }
@@ -275,9 +275,9 @@ private fun AcademicLoginForm(
                     } else {
                         "请填写本次验证码。"
                     },
-                    color = WebVpnColors.InkMuted,
+                    color = CcitColors.InkMuted,
                 )
-                OutlinedButton(onClick = onUseManualCredentials, modifier = Modifier.fillMaxWidth()) {
+                CcitOutlinedButton(onClick = onUseManualCredentials, modifier = Modifier.fillMaxWidth()) {
                     Text("重新输入教务账号密码")
                 }
             }
@@ -295,7 +295,7 @@ private fun AcademicLoginForm(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Next,
             ),
-            colors = webVpnTextFieldColors(),
+            colors = ccitTextFieldColors(),
         )
         Row(
             modifier = Modifier
@@ -331,7 +331,7 @@ private fun AcademicLoginForm(
             keyboardActions = KeyboardActions(
                 onDone = { onLogin(username, password, captchaCode, rememberPassword) },
             ),
-            colors = webVpnTextFieldColors(),
+            colors = ccitTextFieldColors(),
         )
         Spacer(Modifier.width(10.dp))
         AcademicCaptcha(
@@ -345,7 +345,7 @@ private fun AcademicLoginForm(
             Icon(Icons.Default.Refresh, contentDescription = "刷新教务验证码")
         }
     }
-    WebVpnPrimaryButton(
+    CcitPrimaryButton(
         onClick = { onLogin(username, password, captchaCode, rememberPassword) },
         modifier = Modifier.fillMaxWidth(),
         enabled = !state.submitting &&
@@ -359,7 +359,7 @@ private fun AcademicLoginForm(
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
-                    color = WebVpnColors.Surface,
+                    color = CcitColors.Surface,
                 )
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -380,7 +380,6 @@ private fun AcademicGradeFilters(
     onBestOnlyChanged: (Boolean) -> Unit,
     onQueryGrades: () -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
     val termLabel = state.terms.firstOrNull { it.value == state.selectedTerm }?.label
         ?: "全部学期"
 
@@ -388,30 +387,15 @@ private fun AcademicGradeFilters(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-    Text("已登录学生端", color = WebVpnColors.Success, fontWeight = FontWeight.Bold)
-    Box(modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(
-            onClick = { menuExpanded = true },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(termLabel, modifier = Modifier.weight(1f))
-            Icon(Icons.Default.ExpandMore, contentDescription = null)
-        }
-        DropdownMenu(
-            expanded = menuExpanded,
-            onDismissRequest = { menuExpanded = false },
-        ) {
-            state.terms.forEach { term ->
-                DropdownMenuItem(
-                    text = { Text(term.label) },
-                    onClick = {
-                        menuExpanded = false
-                        onSelectTerm(term.value)
-                    },
-                )
-            }
-        }
-    }
+    Text("已登录学生端", color = CcitColors.Success, fontWeight = FontWeight.Bold)
+    CcitSelectField(
+        label = "学年学期",
+        value = state.selectedTerm,
+        options = state.terms.map { it.value to it.label },
+        onValueChange = onSelectTerm,
+        modifier = Modifier.fillMaxWidth(),
+        fallbackText = termLabel,
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -421,7 +405,7 @@ private fun AcademicGradeFilters(
         Checkbox(checked = state.bestOnly, onCheckedChange = onBestOnlyChanged)
         Text("同一课程只显示最好成绩")
     }
-    WebVpnPrimaryButton(
+    CcitPrimaryButton(
         onClick = onQueryGrades,
         modifier = Modifier.fillMaxWidth(),
         enabled = !state.loadingGrades,
@@ -438,7 +422,7 @@ private fun AcademicCaptcha(bytes: ByteArray?, loading: Boolean) {
     val bitmap = remember(bytes) {
         bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.asImageBitmap()
     }
-    WebVpnCard(modifier = Modifier.size(width = 112.dp, height = 50.dp)) {
+    CcitCard(modifier = Modifier.size(width = 112.dp, height = 50.dp)) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().height(50.dp)) {
             Crossfade(
                 targetState = when {
@@ -451,8 +435,8 @@ private fun AcademicCaptcha(bytes: ByteArray?, loading: Boolean) {
             ) { captchaState ->
                 Box(Modifier.fillMaxWidth().height(50.dp), contentAlignment = Alignment.Center) {
                     when (captchaState) {
-                        0 -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        1 -> Text("点击刷新", color = WebVpnColors.InkMuted)
+                        0 -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        1 -> Text("点击刷新", color = CcitColors.InkMuted)
                         else -> bitmap?.let {
                             Image(bitmap = it, contentDescription = "教务系统图形验证码")
                         }
@@ -465,7 +449,7 @@ private fun AcademicCaptcha(bytes: ByteArray?, loading: Boolean) {
 
 @Composable
 private fun GradeCard(grade: CourseGrade) {
-    WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+    CcitCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -477,14 +461,14 @@ private fun GradeCard(grade: CourseGrade) {
                         listOf(grade.semester, grade.courseCode)
                             .filter(String::isNotBlank)
                             .joinToString(" · "),
-                        color = WebVpnColors.InkMuted,
+                        color = CcitColors.InkMuted,
                     )
                 }
                 Spacer(Modifier.width(12.dp))
                 Text(
                     grade.score.ifBlank { "—" },
                     style = MaterialTheme.typography.headlineMedium,
-                    color = WebVpnColors.Brown,
+                    color = CcitColors.Brown,
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -495,7 +479,7 @@ private fun GradeCard(grade: CourseGrade) {
                     grade.assessmentMethod,
                     grade.courseAttribute,
                 ).filter(String::isNotBlank).joinToString("  ·  "),
-                color = WebVpnColors.InkMuted,
+                color = CcitColors.InkMuted,
             )
             listOf(grade.scoreMark, grade.description, grade.note)
                 .filter(String::isNotBlank)
@@ -515,6 +499,19 @@ private fun AcademicLoading(message: String) {
     ) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(10.dp))
-        Text(message, color = WebVpnColors.InkMuted)
+        Text(message, color = CcitColors.InkMuted)
+    }
+}
+
+@Composable
+private fun AcademicGradeSkeleton(message: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CcitSkeletonBlock(Modifier.fillMaxWidth(0.58f).height(22.dp), CircleShape)
+        CcitSkeletonBlock(Modifier.fillMaxWidth().height(15.dp), CircleShape)
+        CcitSkeletonBlock(Modifier.fillMaxWidth(0.78f).height(15.dp), CircleShape)
+        Text(message, color = CcitColors.InkMuted)
     }
 }

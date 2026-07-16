@@ -28,16 +28,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,7 +53,9 @@ import androidx.compose.ui.unit.dp
 import edu.ccit.webvpn.core.academic.AcademicTimetable
 import edu.ccit.webvpn.core.academic.TimetableCourse
 import edu.ccit.webvpn.core.academic.TimetablePeriod
-import edu.ccit.webvpn.core.ui.WebVpnColors
+import edu.ccit.webvpn.core.ui.CcitColors
+import edu.ccit.webvpn.core.ui.CcitSelectField
+import edu.ccit.webvpn.core.ui.CcitOutlinedButton
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -147,13 +145,13 @@ private fun TimetableContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 14.dp),
-                color = WebVpnColors.Card,
+                color = CcitColors.Card,
                 shape = MaterialTheme.shapes.medium,
-                border = BorderStroke(1.dp, WebVpnColors.Stroke),
+                border = BorderStroke(1.dp, CcitColors.Stroke),
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("备注", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Text(timetable.note, color = WebVpnColors.InkMuted, style = MaterialTheme.typography.bodySmall)
+                    Text(timetable.note, color = CcitColors.InkMuted, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -177,7 +175,6 @@ private fun TimetableControls(
     onTermChanged: (String) -> Unit,
     onRefresh: () -> Unit,
 ) {
-    var termMenuExpanded by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -185,32 +182,14 @@ private fun TimetableControls(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
-                OutlinedButton(
-                    onClick = { termMenuExpanded = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        timetable.selectedTerm.ifBlank { "当前学期" },
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(Icons.Default.ExpandMore, contentDescription = null)
-                }
-                DropdownMenu(
-                    expanded = termMenuExpanded,
-                    onDismissRequest = { termMenuExpanded = false },
-                ) {
-                    timetable.terms.forEach { term ->
-                        DropdownMenuItem(
-                            text = { Text(term.label) },
-                            onClick = {
-                                termMenuExpanded = false
-                                if (term.value != timetable.selectedTerm) onTermChanged(term.value)
-                            },
-                        )
-                    }
-                }
-            }
+            CcitSelectField(
+                label = "学年学期",
+                value = timetable.selectedTerm,
+                options = timetable.terms.map { it.value to it.label },
+                onValueChange = { if (it != timetable.selectedTerm) onTermChanged(it) },
+                modifier = Modifier.weight(1f),
+                fallbackText = "当前学期",
+            )
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = onRefresh, enabled = !loading) {
                 Crossfade(targetState = loading, animationSpec = tween(160), label = "refresh timetable") { refreshing ->
@@ -245,9 +224,9 @@ private fun TimetableControls(
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = WebVpnColors.Card,
+            color = CcitColors.Card,
             shape = MaterialTheme.shapes.medium,
-            border = BorderStroke(1.dp, WebVpnColors.Stroke),
+            border = BorderStroke(1.dp, CcitColors.Stroke),
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -262,11 +241,11 @@ private fun TimetableControls(
                     Text(
                         "第 $selectedWeek 周 · 星期${WeekdayShortNames[selectedDay - 1]}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = WebVpnColors.InkMuted,
+                        color = CcitColors.InkMuted,
                     )
                 }
                 if (selectedDate == today) {
-                    Surface(color = WebVpnColors.Rose, shape = MaterialTheme.shapes.small) {
+                    Surface(color = CcitColors.Rose, shape = MaterialTheme.shapes.small) {
                         Text(
                             "今天",
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -288,34 +267,14 @@ private fun TimetableDropdown(
     onSelected: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        OutlinedButton(
-            onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(label, style = MaterialTheme.typography.labelSmall, color = WebVpnColors.InkMuted)
-                Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-            }
-            Icon(Icons.Default.ExpandMore, contentDescription = "选择$label")
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.widthIn(min = 150.dp),
-        ) {
-            items.forEach { (key, text) ->
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        expanded = false
-                        onSelected(key)
-                    },
-                )
-            }
-        }
-    }
+    CcitSelectField(
+        label = label,
+        value = items.firstOrNull { it.second == value }?.first ?: items.first().first,
+        options = items,
+        onValueChange = onSelected,
+        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
+        fallbackText = value,
+    )
 }
 
 @Composable
@@ -348,14 +307,14 @@ private fun SingleDayTimetable(
                     Text(
                         it.format(DateLabelFormatter),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = WebVpnColors.InkMuted,
+                        color = CcitColors.InkMuted,
                     )
                 }
             }
             Text(
                 if (dayCourses.isEmpty()) "当日无课" else "${dayCourses.size} 门课程",
                 style = MaterialTheme.typography.labelLarge,
-                color = WebVpnColors.InkMuted,
+                color = CcitColors.InkMuted,
             )
         }
 
@@ -377,9 +336,9 @@ private fun SingleDayPeriodRow(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = WebVpnColors.Card,
+        color = CcitColors.Card,
         shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(1.dp, WebVpnColors.Stroke),
+        border = BorderStroke(1.dp, CcitColors.Stroke),
     ) {
         Row(
             modifier = Modifier
@@ -398,8 +357,8 @@ private fun SingleDayPeriodRow(
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Spacer(Modifier.height(5.dp))
-                Text(period.startTime, style = MaterialTheme.typography.labelSmall, color = WebVpnColors.InkMuted)
-                Text(period.endTime, style = MaterialTheme.typography.labelSmall, color = WebVpnColors.InkMuted)
+                Text(period.startTime, style = MaterialTheme.typography.labelSmall, color = CcitColors.InkMuted)
+                Text(period.endTime, style = MaterialTheme.typography.labelSmall, color = CcitColors.InkMuted)
             }
             Column(
                 modifier = Modifier.weight(1f),
@@ -410,7 +369,7 @@ private fun SingleDayPeriodRow(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp),
                         contentAlignment = Alignment.CenterStart,
                     ) {
-                        Text("无课程", color = WebVpnColors.InkMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text("无课程", color = CcitColors.InkMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                 } else {
                     courses.forEach { course ->
@@ -425,17 +384,17 @@ private fun SingleDayPeriodRow(
 @Composable
 private fun CourseBlock(course: TimetableCourse, onClick: () -> Unit) {
     val colors = listOf(
-        WebVpnColors.Rose.copy(alpha = 0.72f),
-        WebVpnColors.CardStrong,
-        WebVpnColors.Success.copy(alpha = 0.22f),
-        WebVpnColors.Brown.copy(alpha = 0.20f),
+        CcitColors.Rose.copy(alpha = 0.72f),
+        CcitColors.CardStrong,
+        CcitColors.Success.copy(alpha = 0.22f),
+        CcitColors.Brown.copy(alpha = 0.20f),
         Color(0xFFE6D8C8),
     )
     val color = colors[(course.name.hashCode() and Int.MAX_VALUE) % colors.size]
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = color,
-        contentColor = WebVpnColors.Ink,
+        contentColor = CcitColors.Ink,
         shape = MaterialTheme.shapes.small,
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -458,7 +417,7 @@ private fun CourseBlock(course: TimetableCourse, onClick: () -> Unit) {
                 Text(
                     "教师 · ${course.teacher}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = WebVpnColors.InkMuted,
+                    color = CcitColors.InkMuted,
                     maxLines = 1,
                 )
             }
@@ -486,7 +445,7 @@ private fun CourseDetailDialog(course: TimetableCourse, onDismiss: () -> Unit) {
 @Composable
 private fun DetailLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth()) {
-        Text(label, color = WebVpnColors.InkMuted, modifier = Modifier.width(52.dp))
+        Text(label, color = CcitColors.InkMuted, modifier = Modifier.width(52.dp))
         Text(value, modifier = Modifier.weight(1f))
     }
 }
@@ -494,9 +453,12 @@ private fun DetailLine(label: String, value: String) {
 @Composable
 private fun CenteredTimetableLoading() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             CircularProgressIndicator()
-            Text("正在解析理论课表…", color = WebVpnColors.InkMuted)
+            Text("正在解析理论课表…", color = CcitColors.InkMuted)
         }
     }
 }
@@ -506,7 +468,7 @@ private fun EmptyTimetable(onLoad: (String?) -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("课表暂时无法显示", style = MaterialTheme.typography.titleMedium)
-            OutlinedButton(onClick = { onLoad(null) }) { Text("重新加载") }
+            CcitOutlinedButton(onClick = { onLoad(null) }) { Text("重新加载") }
         }
     }
 }

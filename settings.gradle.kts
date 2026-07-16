@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CcTools"
+rootProject.name = "CCIT-Academic"
 
 include(":app")
 include(":core:academic")
@@ -22,3 +22,5 @@ include(":core:captcha")
 include(":core:ui")
 include(":core:webvpn")
 include(":feature:captcha-autofill")
+include(":material-color-utilities")
+include(":placeholder")

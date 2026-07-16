@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -18,6 +19,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,7 +49,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -72,54 +73,67 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import edu.ccit.webvpn.core.academic.AcademicRepository
-import edu.ccit.webvpn.core.ui.WebVpnCard
-import edu.ccit.webvpn.core.ui.WebVpnColors
-import edu.ccit.webvpn.core.ui.WebVpnPrimaryButton
-import edu.ccit.webvpn.core.ui.WebVpnTheme
-import edu.ccit.webvpn.core.ui.webVpnBackground
-import edu.ccit.webvpn.core.ui.webVpnTextFieldColors
+import dagger.hilt.android.AndroidEntryPoint
+import edu.ccit.webvpn.core.ui.CcitCard
+import edu.ccit.webvpn.core.ui.CcitOutlinedButton
+import edu.ccit.webvpn.core.ui.CcitColors
+import edu.ccit.webvpn.core.ui.CcitPrimaryButton
+import edu.ccit.webvpn.core.ui.CcitAcademicTheme
+import edu.ccit.webvpn.core.ui.CcitPalette
+import edu.ccit.webvpn.core.ui.ccitBackground
+import edu.ccit.webvpn.core.ui.ccitTextFieldColors
 import edu.ccit.webvpn.core.webvpn.CaptchaData
 import edu.ccit.webvpn.core.webvpn.LoginResult
 import edu.ccit.webvpn.core.webvpn.RequiredAccountAction
-import edu.ccit.webvpn.core.webvpn.WebVpnAuthRepository
-import edu.ccit.webvpn.core.webvpn.WebVpnCookieJar
-import edu.ccit.webvpn.core.webvpn.WebVpnNetwork
-import edu.ccit.webvpn.core.webvpn.WebVpnSessionManager
+import edu.ccit.webvpn.settings.AppearanceState
+import edu.ccit.webvpn.settings.AppearanceViewModel
+import edu.ccit.webvpn.settings.DarkPreference
+import edu.ccit.webvpn.settings.Theme
 import kotlinx.coroutines.delay
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val sessionManager = WebVpnSessionManager(applicationContext)
-        val cookieJar = WebVpnCookieJar()
-        val client = WebVpnNetwork.createClient(
-            cookieJar = cookieJar,
-        )
-        val repository = WebVpnAuthRepository(
-            api = WebVpnNetwork.createApi(client),
-            sessionStore = sessionManager,
-            cookieJar = cookieJar,
-        )
-        val academicRepository = AcademicRepository(client, sessionManager, cookieJar)
+        enableEdgeToEdge()
 
         setContent {
-            WebVpnTheme {
-                val webVpnViewModel: WebVpnViewModel = viewModel(
-                    factory = WebVpnViewModel.Factory(repository, sessionManager, applicationContext),
+            val appearanceViewModel: AppearanceViewModel = viewModel()
+            val appearance by appearanceViewModel.state.collectAsStateWithLifecycle()
+            val darkTheme = when (appearance.ui.darkPreference) {
+                DarkPreference.FOLLOW_SYSTEM -> isSystemInDarkTheme()
+                DarkPreference.ALWAYS -> true
+                DarkPreference.DISABLED -> false
+            }
+            CcitAcademicTheme(
+                palette = appearance.theme.theme.toPalette(),
+                customSeedColor = appearance.theme.customColor,
+                customVariant = appearance.theme.customVariant,
+                darkTheme = darkTheme,
+                amoled = appearance.ui.darkAmoled,
+                reduceMotion = appearance.ui.reduceEffect,
+            ) {
+                val webVpnViewModel: WebVpnViewModel = viewModel()
+                val academicViewModel: AcademicViewModel = viewModel()
+                WebVpnApp(
+                    viewModel = webVpnViewModel,
+                    academicViewModel = academicViewModel,
+                    appearance = appearance,
+                    appearanceViewModel = appearanceViewModel,
                 )
-                val academicViewModel: AcademicViewModel = viewModel(
-                    factory = AcademicViewModel.Factory(
-                        academicRepository,
-                        sessionManager,
-                        applicationContext,
-                    ),
-                )
-                WebVpnApp(webVpnViewModel, academicViewModel)
             }
         }
     }
+}
+
+private fun Theme.toPalette(): CcitPalette = when (this) {
+    Theme.BLUE -> CcitPalette.Blue
+    Theme.GREEN -> CcitPalette.Green
+    Theme.ORANGE -> CcitPalette.Orange
+    Theme.PINK -> CcitPalette.Pink
+    Theme.PURPLE -> CcitPalette.Purple
+    Theme.DYNAMIC -> CcitPalette.Dynamic
+    Theme.CUSTOM -> CcitPalette.Custom
 }
 
 private enum class AppScene { Loading, Login, Authenticated }
@@ -128,6 +142,8 @@ private enum class AppScene { Loading, Login, Authenticated }
 private fun WebVpnApp(
     viewModel: WebVpnViewModel,
     academicViewModel: AcademicViewModel,
+    appearance: AppearanceState,
+    appearanceViewModel: AppearanceViewModel,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val academicState by academicViewModel.uiState.collectAsStateWithLifecycle()
@@ -179,8 +195,8 @@ private fun WebVpnApp(
     }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize().webVpnBackground(),
-        containerColor = WebVpnColors.Shell,
+        modifier = Modifier.fillMaxSize().ccitBackground(),
+        containerColor = CcitColors.Shell,
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Box(
@@ -226,6 +242,8 @@ private fun WebVpnApp(
                     onSaveEvaluation = academicViewModel::saveEvaluation,
                     onAcademicLogout = academicViewModel::logout,
                     onLogout = viewModel::logout,
+                    appearance = appearance,
+                    appearanceViewModel = appearanceViewModel,
                 )
                 AppScene.Login -> LoginScreen(
                     state = state,
@@ -294,16 +312,16 @@ private fun LoginScreen(
                 imageVector = Icons.Default.VpnKey,
                 contentDescription = null,
                 modifier = Modifier.size(34.dp),
-                tint = WebVpnColors.Brown,
+                tint = CcitColors.Brown,
             )
             Spacer(Modifier.width(12.dp))
             Column {
-                Text("WebVPN", style = MaterialTheme.typography.headlineLarge)
-                Text("长春工程学院统一入口", color = WebVpnColors.InkMuted)
+                Text("CCIT-Academic", style = MaterialTheme.typography.headlineLarge)
+                Text("长春工程学院 · WebVPN 统一入口", color = CcitColors.InkMuted)
             }
         }
 
-        WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+        CcitCard(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -315,7 +333,7 @@ private fun LoginScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            OutlinedButton(
+                            CcitOutlinedButton(
                                 onClick = { onSelectSavedAccount(account.username) },
                                 modifier = Modifier.weight(1f),
                             ) {
@@ -345,7 +363,7 @@ private fun LoginScreen(
                     singleLine = true,
                     enabled = !usingSavedPassword,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                    colors = webVpnTextFieldColors(),
+                    colors = ccitTextFieldColors(),
                 )
 
                 AnimatedContent(
@@ -358,7 +376,7 @@ private fun LoginScreen(
                     label = "saved credentials",
                 ) { savedPassword ->
                 if (savedPassword) {
-                    WebVpnCard(modifier = Modifier.fillMaxWidth()) {
+                    CcitCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -367,7 +385,7 @@ private fun LoginScreen(
                                 Icon(
                                     Icons.Default.CheckCircle,
                                     contentDescription = null,
-                                    tint = WebVpnColors.Success,
+                                    tint = CcitColors.Success,
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text("已使用本机加密保存的密码")
@@ -378,9 +396,9 @@ private fun LoginScreen(
                                 } else {
                                     "请填写本次验证码。"
                                 },
-                                color = WebVpnColors.InkMuted,
+                                color = CcitColors.InkMuted,
                             )
-                            OutlinedButton(
+                            CcitOutlinedButton(
                                 onClick = onUseManualCredentials,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
@@ -401,7 +419,7 @@ private fun LoginScreen(
                             keyboardType = KeyboardType.Password,
                             imeAction = ImeAction.Next,
                         ),
-                        colors = webVpnTextFieldColors(),
+                        colors = ccitTextFieldColors(),
                     )
                     Row(
                         modifier = Modifier
@@ -439,7 +457,7 @@ private fun LoginScreen(
                                     onLogin(username, password, captchaCode, rememberPassword)
                                 },
                             ),
-                            colors = webVpnTextFieldColors(),
+                            colors = ccitTextFieldColors(),
                         )
                         Spacer(Modifier.width(10.dp))
                         CaptchaImage(
@@ -455,7 +473,7 @@ private fun LoginScreen(
                     }
                 }
 
-                WebVpnPrimaryButton(
+                CcitPrimaryButton(
                     onClick = { onLogin(username, password, captchaCode, rememberPassword) },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = configuration != null &&
@@ -470,7 +488,7 @@ private fun LoginScreen(
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
                                 strokeWidth = 2.dp,
-                                color = WebVpnColors.Surface,
+                                color = CcitColors.Surface,
                             )
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -501,7 +519,7 @@ private fun CaptchaImage(captcha: CaptchaData?, loading: Boolean) {
         }.getOrNull()
     }
 
-    WebVpnCard(modifier = Modifier.size(width = 112.dp, height = 50.dp)) {
+    CcitCard(modifier = Modifier.size(width = 112.dp, height = 50.dp)) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Crossfade(
                 targetState = when {
@@ -514,8 +532,8 @@ private fun CaptchaImage(captcha: CaptchaData?, loading: Boolean) {
             ) { captchaState ->
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     when (captchaState) {
-                        0 -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        1 -> Text("点击刷新", color = WebVpnColors.InkMuted)
+                        0 -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        1 -> Text("点击刷新", color = CcitColors.InkMuted)
                         else -> imageBitmap?.let {
                             Image(bitmap = it, contentDescription = "图形验证码")
                         }
@@ -528,9 +546,13 @@ private fun CaptchaImage(captcha: CaptchaData?, loading: Boolean) {
 
 @Composable
 private fun LoadingScreen(message: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
         CircularProgressIndicator()
         Spacer(Modifier.height(14.dp))
-        Text(message, color = WebVpnColors.InkMuted)
+        Text(message, color = CcitColors.InkMuted)
     }
 }

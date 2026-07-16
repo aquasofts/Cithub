@@ -1,9 +1,8 @@
 package edu.ccit.webvpn
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
 import edu.ccit.webvpn.core.captcha.CaptchaAutomation
 import edu.ccit.webvpn.core.academic.AcademicApiException
 import edu.ccit.webvpn.core.academic.AcademicOverview
@@ -26,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class AcademicUiState(
     val captchaAutofillEnabled: Boolean = false,
@@ -61,7 +61,8 @@ data class AcademicUiState(
     val message: String? = null,
 )
 
-class AcademicViewModel(
+@HiltViewModel
+class AcademicViewModel @Inject constructor(
     private val repository: AcademicRepository,
     private val credentialStore: AcademicCredentialStore,
     private val captchaAutomation: CaptchaAutomation,
@@ -675,22 +676,6 @@ class AcademicViewModel(
         initializationJob?.cancel()
         captchaAutomation.close()
         super.onCleared()
-    }
-
-    class Factory(
-        private val repository: AcademicRepository,
-        private val credentialStore: AcademicCredentialStore,
-        private val context: Context,
-    ) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            require(modelClass.isAssignableFrom(AcademicViewModel::class.java))
-            return AcademicViewModel(
-                repository,
-                credentialStore,
-                CaptchaAutomationProvider.get(context),
-            ) as T
-        }
     }
 
     private companion object {

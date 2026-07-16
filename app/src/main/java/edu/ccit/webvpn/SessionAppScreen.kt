@@ -6,8 +6,12 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,7 +20,10 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,15 +50,14 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,14 +68,16 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -81,11 +89,20 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import edu.ccit.webvpn.core.ui.WebVpnCard
-import edu.ccit.webvpn.core.ui.WebVpnColors
+import edu.ccit.webvpn.core.ui.CcitCard
+import edu.ccit.webvpn.core.ui.CcitColors
+import edu.ccit.webvpn.core.ui.ccitBackground
+import edu.ccit.webvpn.core.ui.CcitOutlinedButton
 import edu.ccit.webvpn.core.academic.EvaluationAnswer
 import edu.ccit.webvpn.core.webvpn.LoginResult
 import edu.ccit.webvpn.core.webvpn.RequiredAccountAction
+import edu.ccit.webvpn.settings.AppearanceSettingsScreen
+import edu.ccit.webvpn.settings.AppearanceState
+import edu.ccit.webvpn.settings.AppearanceViewModel
+import edu.ccit.webvpn.settings.AcademicFeatureSettings
+import edu.ccit.webvpn.settings.NavigationLabel
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private enum class MainTab(val label: String) {
@@ -97,6 +114,8 @@ private enum class MainTab(val label: String) {
 private const val AcademicHomeRoute = "academic_home"
 private const val AcademicFeatureRoute = "academic_feature"
 private const val FeatureIdArgument = "featureId"
+private const val MainContentRoute = "main_content"
+private const val AppearanceSettingsRoute = "appearance_settings"
 
 private fun academicFeatureRoute(feature: AcademicFeature): String =
     "$AcademicFeatureRoute/${feature.id}"
@@ -126,11 +145,18 @@ fun AuthenticatedApp(
     onSaveEvaluation: (List<EvaluationAnswer>, String, Boolean) -> Unit,
     onAcademicLogout: () -> Unit,
     onLogout: () -> Unit,
+    appearance: AppearanceState,
+    appearanceViewModel: AppearanceViewModel,
 ) {
-    val context = LocalContext.current
-    val preferences = remember { AcademicFeaturePreferences(context) }
-    val featureOrder = remember { mutableStateListOf<AcademicFeature>().apply { addAll(preferences.loadOrder()) } }
-    val favorites = remember { mutableStateListOf<String>().apply { addAll(preferences.loadFavorites()) } }
+    val storedFeatures by appearanceViewModel.academicFeatureSettings.collectAsStateWithLifecycle(
+        initialValue = AcademicFeatureSettings(),
+    )
+    val resolvedOrder = remember(storedFeatures.orderIds) {
+        val saved = storedFeatures.orderIds.mapNotNull(AcademicFeature::fromId).distinct()
+        saved + AcademicFeature.defaults.filterNot(saved::contains)
+    }
+    val featureOrder = remember { mutableStateListOf<AcademicFeature>() }
+    val favorites = remember { mutableStateListOf<String>() }
     var selectedTab by remember { mutableStateOf(MainTab.Academic) }
     var arranging by remember { mutableStateOf(false) }
     val pagerState = rememberPagerState(
@@ -138,11 +164,33 @@ fun AuthenticatedApp(
         pageCount = { MainTab.entries.size },
     )
     val academicNavController = rememberNavController()
+    val rootNavController = rememberNavController()
+
+    LaunchedEffect(resolvedOrder, arranging) {
+        if (!arranging && featureOrder != resolvedOrder) {
+            featureOrder.clear()
+            featureOrder.addAll(resolvedOrder)
+        }
+    }
+
+    LaunchedEffect(storedFeatures.favoriteIds) {
+        val validFavorites = storedFeatures.favoriteIds.filterTo(linkedSetOf()) {
+            AcademicFeature.fromId(it) != null
+        }
+        if (favorites.toSet() != validFavorites) {
+            favorites.clear()
+            favorites.addAll(validFavorites)
+        }
+    }
 
     LaunchedEffect(selectedTab) {
         pagerState.animateScrollToPage(
             page = selectedTab.ordinal,
-            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+            animationSpec = if (appearance.ui.reduceEffect) {
+                tween(180, easing = FastOutSlowInEasing)
+            } else {
+                spring(dampingRatio = 0.9f, stiffness = 700f)
+            },
         )
         if (selectedTab != MainTab.Academic && academicNavController.currentDestination != null) {
             academicNavController.popBackStack(AcademicHomeRoute, inclusive = false)
@@ -157,7 +205,9 @@ fun AuthenticatedApp(
 
     fun toggleFavorite(feature: AcademicFeature) {
         if (feature.id in favorites) favorites.remove(feature.id) else favorites.add(feature.id)
-        preferences.saveFavorites(favorites.toSet())
+        appearanceViewModel.academicFeatureSettings.save {
+            it.copy(favoriteIds = favorites.toSet())
+        }
     }
 
     fun openFeature(feature: AcademicFeature) {
@@ -172,6 +222,36 @@ fun AuthenticatedApp(
         }
     }
 
+    NavHost(
+        navController = rootNavController,
+        startDestination = MainContentRoute,
+        modifier = Modifier.fillMaxSize(),
+        enterTransition = {
+            scaleIn(
+                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                initialScale = if (appearance.ui.reduceEffect) 1f else 0.9f,
+            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 300))
+        },
+        exitTransition = {
+            scaleOut(
+                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                targetScale = if (appearance.ui.reduceEffect) 1f else 1.1f,
+            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 300))
+        },
+        popEnterTransition = {
+            scaleIn(
+                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                initialScale = if (appearance.ui.reduceEffect) 1f else 1.1f,
+            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 300))
+        },
+        popExitTransition = {
+            scaleOut(
+                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                targetScale = if (appearance.ui.reduceEffect) 1f else 0.9f,
+            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 300))
+        },
+    ) {
+        composable(MainContentRoute) {
     Column(Modifier.fillMaxSize()) {
         HorizontalPager(
             state = pagerState,
@@ -202,7 +282,11 @@ fun AuthenticatedApp(
                             featureOrder.add(to, featureOrder.removeAt(from))
                         }
                     },
-                    onOrderSettled = { preferences.saveOrder(featureOrder) },
+                    onOrderSettled = {
+                        appearanceViewModel.academicFeatureSettings.save {
+                            it.copy(orderIds = featureOrder.map(AcademicFeature::id))
+                        }
+                    },
                     onRefreshCaptcha = onRefreshAcademicCaptcha,
                     onLogin = onAcademicLogin,
                     onSelectSavedAccount = onSelectSavedAcademicAccount,
@@ -220,12 +304,14 @@ fun AuthenticatedApp(
                     onOpenEvaluationCourse = onOpenEvaluationCourse,
                     onCloseEvaluationForm = onCloseEvaluationForm,
                     onSaveEvaluation = onSaveEvaluation,
+                    reduceMotion = appearance.ui.reduceEffect,
                 )
                 MainTab.Mine -> MineScreen(
                     result = result,
                     academicState = academicState,
                     loggingOut = loggingOut,
                     checkingSession = checkingSession,
+                    onOpenSettings = { rootNavController.navigate(AppearanceSettingsRoute) },
                     onAcademicLogout = {
                         academicNavController.popBackStack(AcademicHomeRoute, inclusive = false)
                         CookieManager.getInstance().removeAllCookies(null)
@@ -239,28 +325,122 @@ fun AuthenticatedApp(
             }
             }
         }
-        NavigationBar(containerColor = WebVpnColors.Surface) {
+        MainNavigationBar(
+            selectedTab = selectedTab,
+            floating = appearance.ui.bottomNavFloating,
+            labelMode = appearance.ui.bottomNavLabel,
+            reduceMotion = appearance.ui.reduceEffect,
+            onSelect = { tab ->
+                selectedTab = tab
+                arranging = false
+            },
+        )
+    }
+        }
+        composable(AppearanceSettingsRoute) {
+            AppearanceSettingsScreen(
+                current = appearance,
+                themeSettings = appearanceViewModel.themeSettings,
+                uiSettings = appearanceViewModel.uiSettings,
+                reduceEffect = appearance.ui.reduceEffect,
+                onThemedIconChange = appearanceViewModel::setThemedAppIcon,
+                onBack = rootNavController::navigateUp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MainNavigationBar(
+    selectedTab: MainTab,
+    floating: Boolean,
+    labelMode: NavigationLabel,
+    reduceMotion: Boolean,
+    onSelect: (MainTab) -> Unit,
+) {
+    val content: @Composable () -> Unit = {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             MainTab.entries.forEach { tab ->
-                NavigationBarItem(
-                    selected = selectedTab == tab,
-                    onClick = {
-                        selectedTab = tab
-                        arranging = false
+                val selected = selectedTab == tab
+                val showLabel = labelMode == NavigationLabel.ALWAYS ||
+                    (labelMode == NavigationLabel.SELECTED && selected)
+                val width by animateDpAsState(
+                    targetValue = when {
+                        showLabel && selected -> 108.dp
+                        showLabel -> 88.dp
+                        else -> 52.dp
                     },
-                    icon = {
-                        Icon(
-                            when (tab) {
-                                MainTab.Favorites -> Icons.Default.Favorite
-                                MainTab.Academic -> Icons.Default.School
-                                MainTab.Mine -> Icons.Default.AccountCircle
-                            },
-                            contentDescription = tab.label,
-                        )
+                    animationSpec = if (reduceMotion) tween(120) else {
+                        spring(dampingRatio = 0.78f, stiffness = 650f)
                     },
-                    label = { Text(tab.label) },
+                    label = "${tab.name} navigation indicator width",
                 )
+                val iconScale by animateFloatAsState(
+                    targetValue = if (selected && !reduceMotion) 1.12f else 1f,
+                    animationSpec = if (reduceMotion) tween(120) else {
+                        spring(dampingRatio = 0.78f, stiffness = 650f)
+                    },
+                    label = "${tab.name} navigation icon",
+                )
+                Surface(
+                    onClick = { onSelect(tab) },
+                    modifier = Modifier.width(width).height(52.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        Color.Transparent
+                    },
+                    contentColor = if (selected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                    Icon(
+                        when (tab) {
+                            MainTab.Favorites -> Icons.Default.Favorite
+                            MainTab.Academic -> Icons.Default.School
+                            MainTab.Mine -> Icons.Default.AccountCircle
+                        },
+                        contentDescription = tab.label,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = iconScale
+                            scaleY = iconScale
+                        },
+                    )
+                        if (showLabel) {
+                            Spacer(Modifier.width(7.dp))
+                            Text(tab.label, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
             }
         }
+    }
+    if (floating) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+        ) {
+            content()
+        }
+    } else {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            content = content,
+        )
     }
 }
 
@@ -312,6 +492,7 @@ private fun AcademicHomeScreen(
     onOpenEvaluationCourse: (String) -> Unit,
     onCloseEvaluationForm: () -> Unit,
     onSaveEvaluation: (List<EvaluationAnswer>, String, Boolean) -> Unit,
+    reduceMotion: Boolean,
 ) {
     when {
         state.initializing -> CenteredLoading("正在连接教务系统…")
@@ -321,7 +502,7 @@ private fun AcademicHomeScreen(
         ) {
             item {
                 Text("教务系统", style = MaterialTheme.typography.headlineLarge)
-                Text("登录后使用成绩、课表、选课等功能", color = WebVpnColors.InkMuted)
+                Text("登录后使用成绩、课表、选课等功能", color = CcitColors.InkMuted)
             }
             item {
                 AcademicSection(
@@ -342,28 +523,28 @@ private fun AcademicHomeScreen(
             startDestination = AcademicHomeRoute,
             modifier = Modifier.fillMaxSize(),
             enterTransition = {
-                slideInHorizontally(
-                    animationSpec = tween(220, easing = FastOutSlowInEasing),
-                    initialOffsetX = { it },
-                )
+                scaleIn(
+                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    initialScale = if (reduceMotion) 1f else 0.9f,
+                ) + fadeIn(tween(if (reduceMotion) 120 else 300))
             },
             exitTransition = {
-                slideOutHorizontally(
-                    animationSpec = tween(180, easing = FastOutSlowInEasing),
-                    targetOffsetX = { -it / 4 },
-                )
+                scaleOut(
+                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    targetScale = if (reduceMotion) 1f else 1.1f,
+                ) + fadeOut(tween(if (reduceMotion) 120 else 300))
             },
             popEnterTransition = {
-                slideInHorizontally(
-                    animationSpec = tween(180, easing = FastOutSlowInEasing),
-                    initialOffsetX = { -it / 4 },
-                )
+                scaleIn(
+                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    initialScale = if (reduceMotion) 1f else 1.1f,
+                ) + fadeIn(tween(if (reduceMotion) 120 else 300))
             },
             popExitTransition = {
-                slideOutHorizontally(
-                    animationSpec = tween(220, easing = FastOutSlowInEasing),
-                    targetOffsetX = { it },
-                )
+                scaleOut(
+                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    targetScale = if (reduceMotion) 1f else 0.9f,
+                ) + fadeOut(tween(if (reduceMotion) 120 else 300))
             },
         ) {
             composable(AcademicHomeRoute) {
@@ -391,7 +572,7 @@ private fun AcademicHomeScreen(
                 ) ?: return@composable
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = WebVpnColors.Shell,
+                    color = CcitColors.Shell,
                 ) {
                     when (feature) {
                         AcademicFeature.Grades -> FeaturePageHeader(
@@ -426,6 +607,7 @@ private fun AcademicHomeScreen(
                         ) {
                             StudentEvaluationScreen(
                                 state = state,
+                                reduceMotion = reduceMotion,
                                 onLoadBatches = onLoadEvaluationBatches,
                                 onOpenBatch = onOpenEvaluationBatch,
                                 onCloseBatch = onCloseEvaluationBatch,
@@ -476,14 +658,14 @@ private fun FeatureListScreen(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.headlineLarge)
-                    Text(subtitle, color = WebVpnColors.InkMuted)
+                    Text(subtitle, color = CcitColors.InkMuted)
                 }
                 if (onToggleArranging != null) {
                     IconButton(onClick = onToggleArranging) {
                         Icon(
                             Icons.Default.GridView,
                             contentDescription = if (arranging) "完成排列" else "排列",
-                            tint = if (arranging) WebVpnColors.Success else WebVpnColors.Brown,
+                            tint = if (arranging) CcitColors.Success else CcitColors.Brown,
                         )
                     }
                 }
@@ -531,30 +713,43 @@ private fun FeatureRow(
     var menuExpanded by remember { mutableStateOf(false) }
     var dragDistance by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
+    var menuOffset by remember { mutableStateOf(IntOffset.Zero) }
     var itemHeightPx by remember { mutableFloatStateOf(0f) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val settleOffset = remember { Animatable(0f) }
+    val coroutineScope = rememberCoroutineScope()
     val itemSpacingPx = with(LocalDensity.current) { 12.dp.toPx() }
     val currentIndex by rememberUpdatedState(index)
     val currentMove by rememberUpdatedState(onMove)
     val currentItemHeight by rememberUpdatedState(itemHeightPx)
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.filterIsInstance<PressInteraction.Press>().collect {
+            menuOffset = IntOffset(it.pressPosition.x.roundToInt(), it.pressPosition.y.roundToInt())
+        }
+    }
     val dragScale by animateFloatAsState(
         targetValue = if (dragging) 1.025f else 1f,
-        animationSpec = tween(90),
+        animationSpec = spring(dampingRatio = 0.9f, stiffness = 700f),
         label = "drag scale",
     )
     val cardColor by animateColorAsState(
-        targetValue = if (dragging) WebVpnColors.Card else WebVpnColors.Surface,
-        animationSpec = tween(90),
+        targetValue = if (dragging) CcitColors.Card else CcitColors.Surface,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "drag card color",
     )
     Box(
         modifier = modifier
             .zIndex(if (dragging) 2f else 0f)
-            .offset { IntOffset(0, dragDistance.roundToInt()) }
+            .offset {
+                IntOffset(0, (if (dragging) dragDistance else settleOffset.value).roundToInt())
+            }
             .graphicsLayer { scaleX = dragScale; scaleY = dragScale }
             .onGloballyPositioned { itemHeightPx = it.size.height.toFloat() },
     ) {
-        WebVpnCard(
+        CcitCard(
             modifier = Modifier.fillMaxWidth().combinedClickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
                 enabled = !arranging,
                 onClick = onOpen,
                 onLongClick = { menuExpanded = true },
@@ -566,33 +761,33 @@ private fun FeatureRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
-                    color = WebVpnColors.CardStrong,
+                    color = CcitColors.CardStrong,
                     shape = MaterialTheme.shapes.medium,
                 ) {
                     Icon(
                         feature.icon,
                         contentDescription = null,
-                        tint = WebVpnColors.Brown,
+                        tint = CcitColors.Brown,
                         modifier = Modifier.padding(10.dp).size(24.dp),
                     )
                 }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(feature.title, style = MaterialTheme.typography.titleMedium)
-                    Text(feature.description, color = WebVpnColors.InkMuted)
+                    Text(feature.description, color = CcitColors.InkMuted)
                 }
                 AnimatedVisibility(
                     visible = favorite && !arranging,
                     enter = fadeIn(tween(120)) + scaleIn(tween(130), initialScale = 0.65f),
                     exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.7f),
                 ) {
-                    Icon(Icons.Default.Favorite, contentDescription = "已收藏", tint = WebVpnColors.Brown)
+                    Icon(Icons.Default.Favorite, contentDescription = "已收藏", tint = CcitColors.Brown)
                 }
                 if (arranging) {
                     Icon(
                         Icons.Default.DragHandle,
                         contentDescription = "拖动排列 ${feature.title}",
-                        tint = WebVpnColors.Brown,
+                        tint = CcitColors.Brown,
                         modifier = Modifier
                             .size(40.dp)
                             .padding(8.dp)
@@ -601,18 +796,35 @@ private fun FeatureRow(
                                     onDragStart = {
                                         dragging = true
                                         onDraggingChanged(true)
+                                        coroutineScope.launch { settleOffset.snapTo(0f) }
                                     },
                                     onDragEnd = {
+                                        val releaseOffset = dragDistance
                                         dragging = false
                                         dragDistance = 0f
                                         onDraggingChanged(false)
                                         onOrderSettled()
+                                        coroutineScope.launch {
+                                            settleOffset.snapTo(releaseOffset)
+                                            settleOffset.animateTo(
+                                                0f,
+                                                spring(stiffness = Spring.StiffnessVeryLow),
+                                            )
+                                        }
                                     },
                                     onDragCancel = {
+                                        val releaseOffset = dragDistance
                                         dragging = false
                                         dragDistance = 0f
                                         onDraggingChanged(false)
                                         onOrderSettled()
+                                        coroutineScope.launch {
+                                            settleOffset.snapTo(releaseOffset)
+                                            settleOffset.animateTo(
+                                                0f,
+                                                spring(stiffness = Spring.StiffnessVeryLow),
+                                            )
+                                        }
                                     },
                                 ) { change, amount ->
                                     change.consume()
@@ -635,35 +847,42 @@ private fun FeatureRow(
             }
             }
         }
-        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-            DropdownMenuItem(
-                text = { Text(if (favorite) "取消收藏" else "收藏") },
-                leadingIcon = {
-                    Icon(
-                        if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = null,
-                    )
-                },
-                onClick = {
-                    menuExpanded = false
-                    onToggleFavorite()
-                },
-            )
+        Box(Modifier.offset { menuOffset }) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                shape = MenuDefaults.shape,
+                containerColor = MaterialTheme.colorScheme.background,
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (favorite) "取消收藏" else "收藏") },
+                    leadingIcon = {
+                        Icon(
+                            if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onToggleFavorite()
+                    },
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun EmptyFavoritesCard() {
-    WebVpnCard(Modifier.fillMaxWidth()) {
+    CcitCard(Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(Icons.Default.FavoriteBorder, contentDescription = null, tint = WebVpnColors.Rose)
+            Icon(Icons.Default.FavoriteBorder, contentDescription = null, tint = CcitColors.Rose)
             Text("还没有收藏功能", style = MaterialTheme.typography.titleMedium)
-            Text("前往教务系统，长按功能即可收藏", color = WebVpnColors.InkMuted)
+            Text("前往教务系统，长按功能即可收藏", color = CcitColors.InkMuted)
         }
     }
 }
@@ -723,6 +942,7 @@ private fun MineScreen(
     academicState: AcademicUiState,
     loggingOut: Boolean,
     checkingSession: Boolean,
+    onOpenSettings: () -> Unit,
     onAcademicLogout: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -732,13 +952,21 @@ private fun MineScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Column(Modifier.padding(top = 20.dp, bottom = 4.dp)) {
-                Text("我的", style = MaterialTheme.typography.headlineLarge)
-                Text("WebVPN 账号与连接信息", color = WebVpnColors.InkMuted)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("我的", style = MaterialTheme.typography.headlineLarge)
+                    Text("WebVPN 账号与连接信息", color = CcitColors.InkMuted)
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "设置")
+                }
             }
         }
         item {
-            WebVpnCard(Modifier.fillMaxWidth()) {
+            CcitCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     InfoRow("连接状态", if (checkingSession) "正在确认" else "已连接")
                     InfoRow("用户名", info.username.orEmpty().ifBlank { "—" })
@@ -752,7 +980,7 @@ private fun MineScreen(
         }
         if (result.requiredAction != RequiredAccountAction.None) {
             item {
-                WebVpnCard(Modifier.fillMaxWidth()) {
+                CcitCard(Modifier.fillMaxWidth()) {
                     Text(
                         when (result.requiredAction) {
                             RequiredAccountAction.CompleteTwoFactorAuthentication -> "请先完成账号二次认证"
@@ -768,7 +996,7 @@ private fun MineScreen(
         }
         if (academicState.loggedIn) {
             item {
-                OutlinedButton(
+                CcitOutlinedButton(
                     onClick = onAcademicLogout,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     enabled = !academicState.submitting && !loggingOut,
@@ -784,7 +1012,7 @@ private fun MineScreen(
             }
         }
         item {
-            OutlinedButton(
+            CcitOutlinedButton(
                 onClick = onLogout,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 enabled = !loggingOut,
@@ -803,7 +1031,7 @@ private fun MineScreen(
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = WebVpnColors.InkMuted)
+        Text(label, color = CcitColors.InkMuted)
         Spacer(Modifier.width(20.dp))
         Text(value)
     }
@@ -818,6 +1046,6 @@ private fun CenteredLoading(message: String) {
     ) {
         CircularProgressIndicator()
         Spacer(Modifier.height(12.dp))
-        Text(message, color = WebVpnColors.InkMuted)
+        Text(message, color = CcitColors.InkMuted)
     }
 }

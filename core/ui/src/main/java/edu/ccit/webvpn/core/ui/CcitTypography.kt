@@ -4,22 +4,22 @@ import androidx.compose.material3.Typography
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-val WebVpnTypography = Typography().run {
+val CcitTypography = Typography().run {
     copy(
         headlineLarge = headlineLarge.copy(
-            fontSize = 34.sp,
-            lineHeight = 42.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 32.sp,
+            lineHeight = 40.sp,
+            fontWeight = FontWeight.Medium,
         ),
         titleLarge = titleLarge.copy(
             fontSize = 22.sp,
             lineHeight = 30.sp,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.Medium,
         ),
         titleMedium = titleMedium.copy(
             fontSize = 18.sp,
             lineHeight = 24.sp,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.Medium,
         ),
         bodyLarge = bodyLarge.copy(
             fontSize = 17.sp,
@@ -28,7 +28,7 @@ val WebVpnTypography = Typography().run {
         labelLarge = labelLarge.copy(
             fontSize = 16.sp,
             lineHeight = 22.sp,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.Medium,
         ),
     )
 }

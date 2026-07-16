@@ -1,6 +1,6 @@
 # 开源主题选择
 
-更新时间：2026-06-29
+更新时间：2026-07-16
 
 ## 结论
 
@@ -37,12 +37,12 @@ Android Compose Samples License: https://github.com/android/compose-samples/blob
 
 ```text
 core-ui
-  WebVpnTheme
-  WebVpnColors
-  WebVpnTypography
-  WebVpnShapes
-  WebVpnCard
-  WebVpnPrimaryButton
+  CcitAcademicTheme
+  CcitColors
+  CcitTypography
+  CcitShapes
+  CcitCard
+  CcitPrimaryButton
 
 core-webvpn
   WebVpnApi
@@ -58,3 +58,14 @@ app
   token + Cookie 双保险网络策略
   登录成功后的仪表盘占位
 ```
+
+## 2026 前端重构的上游声明
+
+主题色生成、分段偏好交互和动效参数参考并适配自 TiebaLite；应用内产品名、包内设计系统语义和资源均已改为 CCIT-Academic。TiebaLite 上游采用 GPL-3.0，源码来源与许可证见：
+
+```text
+TiebaLite: https://github.com/HuanCheng65/TiebaLite
+TiebaLite License: https://github.com/HuanCheng65/TiebaLite/blob/master/LICENSE
+```
+
+本地 `placeholder` 模块基于 Android Open Source Project / Accompanist 的 Apache-2.0 实现进行适配，源码文件保留其版权与许可头；`material-color-utilities` 源码同样保留 Android Open Source Project 的 Apache-2.0 许可头。

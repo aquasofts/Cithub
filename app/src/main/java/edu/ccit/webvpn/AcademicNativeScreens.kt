@@ -1,5 +1,11 @@
 package edu.ccit.webvpn
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,15 +21,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -46,10 +48,12 @@ import edu.ccit.webvpn.core.academic.EvaluationBatch
 import edu.ccit.webvpn.core.academic.EvaluationCourse
 import edu.ccit.webvpn.core.academic.EvaluationForm
 import edu.ccit.webvpn.core.academic.SelectedCourse
-import edu.ccit.webvpn.core.ui.WebVpnCard
-import edu.ccit.webvpn.core.ui.WebVpnColors
-import edu.ccit.webvpn.core.ui.WebVpnPrimaryButton
-import edu.ccit.webvpn.core.ui.webVpnTextFieldColors
+import edu.ccit.webvpn.core.ui.CcitCard
+import edu.ccit.webvpn.core.ui.CcitSelectField
+import edu.ccit.webvpn.core.ui.CcitOutlinedButton
+import edu.ccit.webvpn.core.ui.CcitColors
+import edu.ccit.webvpn.core.ui.CcitPrimaryButton
+import edu.ccit.webvpn.core.ui.ccitTextFieldColors
 
 @Composable
 fun CourseSelectionResultsScreen(
@@ -92,36 +96,25 @@ private fun SelectionFilters(
     onSelectTerm: (String) -> Unit,
     onQuery: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
     val label = state.courseSelectionTerms
         .firstOrNull { it.value == state.selectedCourseSelectionTerm }
         ?.label
         ?: "选择学年学期"
-    WebVpnCard(Modifier.fillMaxWidth()) {
+    CcitCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("按学期查看已选课程", style = MaterialTheme.typography.titleMedium)
-            Column(Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    onClick = { expanded = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = state.courseSelectionTerms.isNotEmpty(),
-                ) {
-                    Text(label, modifier = Modifier.weight(1f))
-                    Icon(Icons.Default.ExpandMore, contentDescription = null)
-                }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    state.courseSelectionTerms.filter { it.value.isNotBlank() }.forEach { term ->
-                        DropdownMenuItem(
-                            text = { Text(term.label) },
-                            onClick = {
-                                expanded = false
-                                onSelectTerm(term.value)
-                            },
-                        )
-                    }
-                }
-            }
-            WebVpnPrimaryButton(
+            CcitSelectField(
+                label = "学年学期",
+                value = state.selectedCourseSelectionTerm,
+                options = state.courseSelectionTerms
+                    .filter { it.value.isNotBlank() }
+                    .map { it.value to it.label },
+                onValueChange = onSelectTerm,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = state.courseSelectionTerms.isNotEmpty(),
+                fallbackText = label,
+            )
+            CcitPrimaryButton(
                 onClick = onQuery,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !state.loadingCourseSelection,
@@ -136,12 +129,12 @@ private fun SelectionFilters(
 
 @Composable
 private fun SelectedCourseCard(course: SelectedCourse) {
-    WebVpnCard(Modifier.fillMaxWidth()) {
+    CcitCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(course.courseName, style = MaterialTheme.typography.titleMedium)
             Text(
                 listOf(course.courseCode, course.teacher).filter(String::isNotBlank).joinToString(" · "),
-                color = WebVpnColors.InkMuted,
+                color = CcitColors.InkMuted,
             )
             Text(
                 listOf(
@@ -150,7 +143,7 @@ private fun SelectedCourseCard(course: SelectedCourse) {
                     course.courseAttribute,
                     course.courseNature,
                 ).filter(String::isNotBlank).joinToString("  ·  "),
-                color = WebVpnColors.InkMuted,
+                color = CcitColors.InkMuted,
             )
         }
     }
@@ -165,6 +158,7 @@ fun StudentEvaluationScreen(
     onOpenCourse: (String) -> Unit,
     onCloseForm: () -> Unit,
     onSave: (List<EvaluationAnswer>, String, Boolean) -> Unit,
+    reduceMotion: Boolean,
 ) {
     val navController = rememberNavController()
     LaunchedEffect(Unit) {
@@ -174,6 +168,34 @@ fun StudentEvaluationScreen(
         navController = navController,
         startDestination = EvaluationBatchesRoute,
         modifier = Modifier.fillMaxSize(),
+        enterTransition = {
+            fadeIn(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+                scaleIn(
+                    initialScale = if (reduceMotion) 1f else 0.9f,
+                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                )
+        },
+        exitTransition = {
+            fadeOut(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+                scaleOut(
+                    targetScale = if (reduceMotion) 1f else 1.1f,
+                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                )
+        },
+        popEnterTransition = {
+            fadeIn(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+                scaleIn(
+                    initialScale = if (reduceMotion) 1f else 1.1f,
+                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                )
+        },
+        popExitTransition = {
+            fadeOut(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+                scaleOut(
+                    targetScale = if (reduceMotion) 1f else 0.9f,
+                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                )
+        },
     ) {
         composable(EvaluationBatchesRoute) {
             EvaluationOverview(
@@ -222,7 +244,7 @@ fun StudentEvaluationScreen(
                         NativeLoading("正在加载课程评价表…")
                     } else {
                         NativeEmpty("课程评价表加载失败，请返回课程列表后重试")
-                        OutlinedButton(
+                        CcitOutlinedButton(
                             onClick = { navController.popBackStack() },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -320,25 +342,25 @@ private const val EvaluationFormRoute = "evaluation_form"
 
 @Composable
 private fun EvaluationBatchCard(batch: EvaluationBatch, onOpen: (String) -> Unit) {
-    WebVpnCard(
+    CcitCard(
         Modifier.fillMaxWidth().clickable { onOpen(batch.courseListPath) },
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(batch.name, style = MaterialTheme.typography.titleMedium)
-            Text("${batch.semester} · ${batch.category}", color = WebVpnColors.InkMuted)
-            Text("开放时间：${batch.startDate} 至 ${batch.endDate}", color = WebVpnColors.InkMuted)
+            Text("${batch.semester} · ${batch.category}", color = CcitColors.InkMuted)
+            Text("开放时间：${batch.startDate} 至 ${batch.endDate}", color = CcitColors.InkMuted)
         }
     }
 }
 
 @Composable
 private fun EvaluationCourseCard(course: EvaluationCourse, onOpen: (String) -> Unit) {
-    WebVpnCard(Modifier.fillMaxWidth()) {
+    CcitCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text(course.courseName, style = MaterialTheme.typography.titleMedium)
-                    Text("${course.courseCode} · ${course.teacher}", color = WebVpnColors.InkMuted)
+                    Text("${course.courseCode} · ${course.teacher}", color = CcitColors.InkMuted)
                 }
                 Text(
                     when {
@@ -346,16 +368,16 @@ private fun EvaluationCourseCard(course: EvaluationCourse, onOpen: (String) -> U
                         course.evaluated -> "已保存"
                         else -> "待评价"
                     },
-                    color = if (course.submitted) WebVpnColors.Success else WebVpnColors.Brown,
+                    color = if (course.submitted) CcitColors.Success else CcitColors.Brown,
                     fontWeight = FontWeight.Bold,
                 )
             }
             Text(
                 listOf(course.category, course.teachingHours.takeIf(String::isNotBlank)?.let { "讲课 $it 学时" })
                     .filterNotNull().joinToString(" · "),
-                color = WebVpnColors.InkMuted,
+                color = CcitColors.InkMuted,
             )
-            OutlinedButton(onClick = { onOpen(course.formPath) }, modifier = Modifier.fillMaxWidth()) {
+            CcitOutlinedButton(onClick = { onOpen(course.formPath) }, modifier = Modifier.fillMaxWidth()) {
                 Text(if (course.submitted) "查看评价" else "填写评价")
             }
         }
@@ -396,9 +418,9 @@ private fun EvaluationFormScreen(
                 }
                 Column(Modifier.weight(1f)) {
                     Text(form.courseName.ifBlank { "课程评价" }, style = MaterialTheme.typography.titleMedium)
-                    if (form.category.isNotBlank()) Text(form.category, color = WebVpnColors.InkMuted)
+                    if (form.category.isNotBlank()) Text(form.category, color = CcitColors.InkMuted)
                 }
-                if (form.readOnly) Text("只读", color = WebVpnColors.Success, fontWeight = FontWeight.Bold)
+                if (form.readOnly) Text("只读", color = CcitColors.Success, fontWeight = FontWeight.Bold)
             }
         }
         items(
@@ -406,7 +428,7 @@ private fun EvaluationFormScreen(
             key = { it.id },
             contentType = { "evaluation_question" },
         ) { question ->
-            WebVpnCard(Modifier.fillMaxWidth()) {
+            CcitCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(question.title, style = MaterialTheme.typography.titleMedium)
                     question.options.forEach { option ->
@@ -438,7 +460,7 @@ private fun EvaluationFormScreen(
                     label = { Text("学生建议") },
                     enabled = !form.readOnly && !saving,
                     minLines = 3,
-                    colors = webVpnTextFieldColors(),
+                    colors = ccitTextFieldColors(),
                 )
             }
         }
@@ -450,7 +472,7 @@ private fun EvaluationFormScreen(
         if (!form.readOnly) {
             item(key = "evaluation_actions", contentType = "actions") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
+                    CcitOutlinedButton(
                         onClick = {
                             onSave(answers.map { EvaluationAnswer(it.key, it.value) }, suggestion, false)
                         },
@@ -459,7 +481,7 @@ private fun EvaluationFormScreen(
                     ) {
                         Text("保存")
                     }
-                    WebVpnPrimaryButton(
+                    CcitPrimaryButton(
                         onClick = {
                             onSave(answers.map { EvaluationAnswer(it.key, it.value) }, suggestion, true)
                         },
@@ -482,7 +504,7 @@ private fun EvaluationFormScreen(
 
 @Composable
 private fun NativeLoading(message: String) {
-    WebVpnCard(Modifier.fillMaxWidth()) {
+    CcitCard(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(20.dp),
             horizontalArrangement = Arrangement.Center,
@@ -490,14 +512,14 @@ private fun NativeLoading(message: String) {
         ) {
             CircularProgressIndicator(Modifier.height(22.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(10.dp))
-            Text(message, color = WebVpnColors.InkMuted)
+            Text(message, color = CcitColors.InkMuted)
         }
     }
 }
 
 @Composable
 private fun NativeEmpty(message: String) {
-    WebVpnCard(Modifier.fillMaxWidth()) {
-        Text(message, modifier = Modifier.padding(20.dp), color = WebVpnColors.InkMuted)
+    CcitCard(Modifier.fillMaxWidth()) {
+        Text(message, modifier = Modifier.padding(20.dp), color = CcitColors.InkMuted)
     }
 }

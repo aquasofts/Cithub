@@ -1,6 +1,5 @@
 package edu.ccit.webvpn
 
-import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.automirrored.filled.FactCheck
@@ -47,38 +46,5 @@ enum class AcademicFeature(
         val defaults: List<AcademicFeature> = entries.toList()
 
         fun fromId(id: String): AcademicFeature? = entries.firstOrNull { it.id == id }
-    }
-}
-
-class AcademicFeaturePreferences(context: Context) {
-    private val preferences = context.applicationContext.getSharedPreferences(
-        "academic_features",
-        Context.MODE_PRIVATE,
-    )
-
-    fun loadFavorites(): Set<String> = preferences.getStringSet(FavoritesKey, emptySet())
-        .orEmpty()
-        .filterTo(linkedSetOf()) { AcademicFeature.fromId(it) != null }
-
-    fun saveFavorites(ids: Set<String>) {
-        preferences.edit().putStringSet(FavoritesKey, ids).apply()
-    }
-
-    fun loadOrder(): List<AcademicFeature> {
-        val saved = preferences.getString(OrderKey, null)
-            ?.split(',')
-            .orEmpty()
-            .mapNotNull(AcademicFeature::fromId)
-            .distinct()
-        return saved + AcademicFeature.defaults.filterNot(saved::contains)
-    }
-
-    fun saveOrder(features: List<AcademicFeature>) {
-        preferences.edit().putString(OrderKey, features.joinToString(",") { it.id }).apply()
-    }
-
-    private companion object {
-        const val FavoritesKey = "favorite_ids"
-        const val OrderKey = "feature_order"
     }
 }
