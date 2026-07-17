@@ -217,6 +217,7 @@ class TiebaWireTest {
         assertEquals("2", recorded?.getHeader("client_type"))
         assertEquals("ka:open; CUID:${identity.cuid}; TBBRAND:${android.os.Build.MODEL}", recorded?.getHeader("cookie"))
         assertEquals(TiebaReadRequestFactory.encodedForumName(), recorded?.getHeader("forum_name"))
+        assertNull(recorded?.getHeader("client_user_token"))
         assertNull(recorded?.getHeader("X-CCIT-Tieba-Request"))
     }
 

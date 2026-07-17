@@ -189,10 +189,13 @@ internal fun mapOfficialSignResult(result: TiebaSignResultBean): SignResponse {
             SignOutcome.FAILED,
             "尚未关注长春工程学院吧",
         )
-        code == 0 -> SignResponse(SignOutcome.FAILED, "签到响应数据无效")
+        code == 0 -> SignResponse(SignOutcome.FAILED, "贴吧签到提交失败：签到响应数据无效")
         else -> SignResponse(
             SignOutcome.FAILED,
-            message.ifBlank { code?.let { "签到失败（$it）" } ?: "签到失败（响应缺少错误码）" },
+            message.takeIf(String::isNotBlank)
+                ?.let { "贴吧签到提交失败：$it${code?.let { value -> "（错误码 $value）" }.orEmpty()}" }
+                ?: code?.let { "贴吧签到提交失败（错误码 $it）" }
+                ?: "贴吧签到提交失败（响应缺少错误码）",
         )
     }
 }
@@ -202,9 +205,13 @@ internal fun mapOfficialSignFailure(code: Int, message: String): SignResponse = 
     code == 1004 || message.contains("未关注") -> SignResponse(SignOutcome.FAILED, "尚未关注长春工程学院吧")
     else -> SignResponse(
         SignOutcome.FAILED,
-        message.takeIf(String::isNotBlank)?.let { "$it（错误码 $code）" } ?: "签到失败（错误码 $code）",
+        message.takeIf(String::isNotBlank)
+            ?.let { "贴吧签到提交失败：$it（错误码 $code）" }
+            ?: "贴吧签到提交失败（错误码 $code）",
     )
 }
+
+private class TiebaSignStageException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 private data class UploadPictureEnvelope(
     @SerializedName("error_code") val errorCode: String = "-1",
@@ -261,9 +268,10 @@ class TiebaNetworkRepository internal constructor(
         val credentials = account?.toReadCredentials()
         val sortType = if (sort == ForumSort.BY_REPLY) 0 else 1
         val loadType = if (page <= 1) 1 else 2
-        val resolved = readWithAnonymousRetry(credentials, { it.errorCode() }) { attempt ->
-            readForum(page, sortType, goodOnly, loadType, attempt)
-        }
+        // TiebaLite sends the logged-in credentials only inside CommonRequest and the
+        // multipart stoken field. Do not add client_user_token or silently retry FRS
+        // anonymously: the page's anti.tbs is consumed directly by the sign endpoint.
+        val resolved = readForum(page, sortType, goodOnly, loadType, credentials)
         resolved.requireSuccess("FRS")
         mapForum(resolved, page)
     }
@@ -618,13 +626,22 @@ class TiebaNetworkRepository internal constructor(
         baiduId: String? = account.cookie.cookieValue("BAIDUID"),
     ): AccountEntity {
         val config = settings.clientConfig(baiduId)
-        val current = if (account.zid.isNullOrBlank()) {
-            account.copy(zid = zidProvider(config))
-        } else {
-            account
-        }
-        val session = try {
-            officialClientFactory(current, config).login(current.bduss, current.sToken)
+        return try {
+            val current = if (account.zid.isNullOrBlank()) {
+                account.copy(zid = zidProvider(config))
+            } else {
+                account
+            }
+            val session = officialClientFactory(current, config).login(current.bduss, current.sToken)
+            current.copy(
+                uid = session.uid,
+                name = session.name,
+                nickname = session.nickname,
+                portrait = session.portrait.takeIf(String::isNotBlank)?.let(::portraitUrl)
+                    ?: current.portrait,
+                tbs = session.tbs,
+                lastUpdate = System.currentTimeMillis(),
+            )
         } catch (error: TiebaApiException) {
             Log.w("TiebaSign", "official login refresh failed code=${error.code}")
             throw TiebaApiException(
@@ -633,36 +650,14 @@ class TiebaNetworkRepository internal constructor(
                     ?.let { "贴吧官方登录校验失败：$it（错误码 ${error.code}）" }
                     ?: "贴吧官方登录校验失败（错误码 ${error.code}）",
             )
+        } catch (error: Throwable) {
+            throw signStageFailure("贴吧官方登录校验失败", error)
         }
-        return current.copy(
-            uid = session.uid,
-            name = session.name,
-            nickname = session.nickname,
-            portrait = session.portrait.takeIf(String::isNotBlank)?.let(::portraitUrl)
-                ?: current.portrait,
-            tbs = session.tbs,
-            lastUpdate = System.currentTimeMillis(),
-        )
-    }
-
-    suspend fun refreshForumTbs(account: AccountEntity): String = runRead {
-        val response = readForum(
-            page = 1,
-            sortType = 0,
-            goodOnly = false,
-            loadType = 1,
-            credentials = account.toReadCredentials(),
-        )
-        response.requireSuccess("FORUM_SIGN_TBS")
-        val data = response.data_ ?: throw TiebaReadFailure.Data()
-        requireTargetForum(data.forum?.id, data.forum?.name)
-        data.anti?.tbs?.takeIf(String::isNotBlank)
-            ?: throw IOException("签到凭据无效，请刷新贴吧页面后重试")
     }
 
     /** Mirrors TiebaLite's OfficialTiebaApi.signFlow with the TBS supplied by its caller. */
     suspend fun sign(account: AccountEntity, tbs: String): SignResponse {
-        if (tbs.isBlank()) return SignResponse(SignOutcome.FAILED, "签到凭据无效，请刷新贴吧页面后重试")
+        if (tbs.isBlank()) return SignResponse(SignOutcome.FAILED, "贴吧认证 FRS 失败：签到凭据无效")
         val config = settings.clientConfig(account.cookie.cookieValue("BAIDUID"))
         return try {
             val result = officialClientFactory(account, config).sign(
@@ -686,7 +681,18 @@ class TiebaNetworkRepository internal constructor(
         } catch (error: TiebaApiException) {
             Log.w("TiebaSign", "service failure code=${error.code}")
             mapOfficialSignFailure(error.code, error.message)
+        } catch (error: Throwable) {
+            SignResponse(
+                SignOutcome.FAILED,
+                signStageFailure("贴吧签到提交失败", error).message ?: "贴吧签到提交失败",
+            )
         }
+    }
+
+    private fun signStageFailure(stage: String, error: Throwable): TiebaSignStageException {
+        if (error is TiebaSignStageException) return error
+        val safeFailure = error.toTiebaReadFailure(context)
+        return TiebaSignStageException("$stage：${safeFailure.message ?: "贴吧服务异常"}", safeFailure)
     }
 
     /** TiebaLite starts this sync opportunistically; failures are deliberately handled by the caller. */
@@ -744,7 +750,6 @@ class TiebaNetworkRepository internal constructor(
         return readApi.forum(
             body = readRequests.forum(page, sortType, goodOnly, loadType, credentials, clientConfig),
             forumName = TiebaReadRequestFactory.encodedForumName(),
-            userToken = credentials?.uid?.toString(),
         )
     }
 

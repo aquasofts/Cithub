@@ -235,12 +235,12 @@ class TiebaNetworkTest {
     }
 
     @Test
-    fun accountApiErrorRetriesTheSameProtobufRequestAnonymouslyOnce() = runBlocking {
-        val userTokens = mutableListOf<String?>()
+    fun accountFrsErrorIsNotRetriedAnonymously() = runBlocking {
+        var forumCalls = 0
         val api = object : TiebaReadApi {
-            override suspend fun forum(body: RequestBody, forumName: String, userToken: String?): FrsPageResponse {
-                userTokens += userToken
-                return if (userToken != null) FrsPageResponse(error = Error(error_code = 4)) else successForum()
+            override suspend fun forum(body: RequestBody, forumName: String): FrsPageResponse {
+                forumCalls += 1
+                return FrsPageResponse(error = Error(error_code = 4))
             }
 
             override suspend fun thread(body: RequestBody, userToken: String?): PbPageResponse = successThread()
@@ -262,10 +262,10 @@ class TiebaNetworkTest {
             cookie = "BDUSS=bduss; STOKEN=stoken",
         )
 
-        val result = repository(api).loadForum(1, ForumSort.BY_REPLY, false, account)
+        val failure = runCatching { repository(api).loadForum(1, ForumSort.BY_REPLY, false, account) }
 
-        assertEquals(TARGET_FORUM_NAME, result.forum.name)
-        assertEquals(listOf("7", null), userTokens)
+        assertTrue(failure.isFailure)
+        assertEquals(1, forumCalls)
     }
 
     @Test
@@ -502,7 +502,7 @@ class TiebaNetworkTest {
     fun officialSignResponseRequiresCompleteTiebaLiteUserInfo() {
         val alreadySigned = mapOfficialSignFailure(1101, "已经签到过了")
         val notFollowed = mapOfficialSignFailure(1004, "未关注该吧")
-        val dataFailure = mapOfficialSignFailure(340006, "数据加载失败")
+        val dataFailure = mapOfficialSignFailure(300004, "数据加载失败")
         val success = mapOfficialSignResult(
             TiebaSignResultBean(
                 errorCode = "0",
@@ -525,11 +525,11 @@ class TiebaNetworkTest {
         assertEquals("今日已经签到", alreadySigned.message)
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.FAILED, notFollowed.outcome)
         assertEquals("尚未关注长春工程学院吧", notFollowed.message)
-        assertEquals("数据加载失败（错误码 340006）", dataFailure.message)
+        assertEquals("贴吧签到提交失败：数据加载失败（错误码 300004）", dataFailure.message)
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.SUCCESS, success.outcome)
         assertEquals(8, success.signedDays)
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.FAILED, invalid.outcome)
-        assertEquals("签到响应数据无效", invalid.message)
+        assertEquals("贴吧签到提交失败：签到响应数据无效", invalid.message)
     }
 
     @Test
@@ -693,7 +693,7 @@ class TiebaNetworkTest {
             "",
         )
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.FAILED, response.outcome)
-        assertEquals("签到凭据无效，请刷新贴吧页面后重试", response.message)
+        assertEquals("贴吧认证 FRS 失败：签到凭据无效", response.message)
     }
 
     @Test
@@ -1004,7 +1004,7 @@ private class FakeTiebaReadApi(
     private val threadResponse: PbPageResponse,
     private val floorResponse: PbFloorResponse = PbFloorResponse(error = Error(error_code = 0)),
 ) : TiebaReadApi {
-    override suspend fun forum(body: RequestBody, forumName: String, userToken: String?): FrsPageResponse = forumResponse
+    override suspend fun forum(body: RequestBody, forumName: String): FrsPageResponse = forumResponse
     override suspend fun thread(body: RequestBody, userToken: String?): PbPageResponse = threadResponse
     override suspend fun floor(body: RequestBody, userToken: String?): PbFloorResponse = floorResponse
     override suspend fun profile(body: RequestBody, userToken: String?): ProfileResponse = ProfileResponse(error = Error(error_code = 0))

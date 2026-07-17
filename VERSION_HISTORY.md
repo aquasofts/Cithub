@@ -5,11 +5,23 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.21`
-- Version code: `27`
+- Version name: `2.1.23`
+- Version code: `29`
 - Updated: 2026-07-17
 
 ## Changes
+
+### 2.1.23 (versionCode 29) — 2026-07-17
+
+- Replaced the previous speculative pre-sign refresh chain with TiebaLite's actual split flow: manual sign-in submits the displayed FRS `anti.tbs`, while automatic sign-in refreshes the account and submits the `/c/s/login` TBS.
+- Removed the non-upstream `client_user_token` header from the V12 FRS request and stopped logged-in FRS failures from silently retrying as anonymous responses with unusable sign credentials.
+- Added regression coverage for both TiebaLite sign entry points and for the exact FRS header set.
+
+### 2.1.22 (versionCode 28) — 2026-07-17
+
+- Unified manual and automatic Tieba sign-in so every attempt refreshes and persists the official account before requesting an authenticated FRS TBS.
+- Removed the forum-page TBS from the manual sign-in API and prohibited anonymous FRS fallback for all sign-in writes.
+- Added credential-free stage-specific failures for official login, authenticated FRS, and sign submission, including the exact stage for error `300004`.
 
 ### 2.1.21 (versionCode 27) — 2026-07-17
 

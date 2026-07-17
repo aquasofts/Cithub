@@ -82,7 +82,7 @@ class TiebaRuntime private constructor(context: Context) {
             val preferences = settings.preferences.first()
             val current = accountDao.get()
             if (!preferences.sign.enabled || current == null || !shouldAutoSign(preferences.sign.lastRunAt)) return
-            performSign(current, forumTbs = null, refreshOfficialAccount = true)
+            performSign(current, forumTbs = null)
         }
     }
 
@@ -91,31 +91,19 @@ class TiebaRuntime private constructor(context: Context) {
         if (current == null) {
             return@withLock SignResponse(SignOutcome.FAILED, "请先登录贴吧账号")
         }
-        // TiebaLite's forum button passes the anti.tbs from the currently displayed FRS response.
-        performSign(current, forumTbs = forumTbs, refreshOfficialAccount = false)
+        performSign(current, forumTbs)
     }
 
-    private suspend fun performSign(
-        current: AccountEntity,
-        forumTbs: String?,
-        refreshOfficialAccount: Boolean,
-    ): SignResponse {
+    private suspend fun performSign(current: AccountEntity, forumTbs: String?): SignResponse {
         _signState.value = TiebaSignState.Running
         val response = runCatching {
-            var signingAccount = current
-            var signingTbs = forumTbs
-            if (refreshOfficialAccount || current.zid.isNullOrBlank()) {
-                signingAccount = network.refreshOfficialAccount(current)
-                accountDao.replace(signingAccount)
-                signingTbs = if (refreshOfficialAccount || forumTbs.isNullOrBlank()) {
-                    signingAccount.tbs
-                } else {
-                    // Existing installs did not persist TiebaLite's z_id. Once repaired, obtain
-                    // the FRS anti.tbs with that same identity before the first write.
-                    network.refreshForumTbs(signingAccount)
-                }
-            }
-            network.sign(signingAccount, signingTbs.orEmpty())
+            executeTiebaLiteForumSign(
+                current = current,
+                forumTbs = forumTbs,
+                refreshOfficialAccount = { account -> network.refreshOfficialAccount(account) },
+                persistAccount = accountDao::replace,
+                submitSign = network::sign,
+            )
         }
             .getOrElse { error -> SignResponse(SignOutcome.FAILED, error.message ?: "签到失败") }
         settings.recordSign(response.outcome, response.message)
@@ -130,6 +118,24 @@ class TiebaRuntime private constructor(context: Context) {
             instance ?: TiebaRuntime(context).also { instance = it }
         }
     }
+}
+
+/**
+ * Mirrors TiebaLite's two sign-in entry points:
+ * - the forum button submits the anti.tbs already returned by the displayed FRS page;
+ * - automatic sign-in refreshes the account and submits the anti.tbs returned by /c/s/login.
+ */
+internal suspend fun executeTiebaLiteForumSign(
+    current: AccountEntity,
+    forumTbs: String?,
+    refreshOfficialAccount: suspend (AccountEntity) -> AccountEntity,
+    persistAccount: suspend (AccountEntity) -> Unit,
+    submitSign: suspend (AccountEntity, String) -> SignResponse,
+): SignResponse {
+    if (forumTbs != null) return submitSign(current, forumTbs)
+    val refreshedAccount = refreshOfficialAccount(current)
+    persistAccount(refreshedAccount)
+    return submitSign(refreshedAccount, refreshedAccount.tbs)
 }
 
 private object TiebaImageLoaderFactory : SingletonImageLoader.Factory {

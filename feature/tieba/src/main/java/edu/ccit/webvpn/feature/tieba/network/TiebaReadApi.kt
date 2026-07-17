@@ -81,7 +81,6 @@ internal interface TiebaReadApi {
     suspend fun forum(
         @Body body: RequestBody,
         @Header("forum_name") forumName: String,
-        @Header("client_user_token") userToken: String? = null,
     ): FrsPageResponse
 
     @Headers("$TRACE_HEADER: PB")
