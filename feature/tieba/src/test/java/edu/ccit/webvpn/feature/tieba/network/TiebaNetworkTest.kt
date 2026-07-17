@@ -38,6 +38,7 @@ import edu.ccit.webvpn.feature.tieba.data.AccountEntity
 import edu.ccit.webvpn.feature.tieba.data.TiebaClientConfig
 import edu.ccit.webvpn.feature.tieba.data.TiebaSettingsRepository
 import java.net.URLDecoder
+import java.util.Locale
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody
@@ -55,6 +56,49 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class TiebaNetworkTest {
     private val context: Context = RuntimeEnvironment.getApplication()
+
+    @Test
+    fun tiebaLiteMd5UsesUppercaseHex() {
+        assertEquals("098F6BCD4621D373CADE4E832627B4F6", md5ForTest("test"))
+    }
+
+    @Test
+    fun sofireZidRequestMatchesTiebaLiteX6Handshake() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"data":"","request_id":1,"skey":""}"""))
+        try {
+            val uuid = "00000000-1111-2222-3333-444444444444"
+            runCatching {
+                TiebaSofireClient(
+                    client = OkHttpClient(),
+                    gson = Gson(),
+                    endpoint = server.url("/").toString().removeSuffix("/"),
+                    clock = { 1_700_000_000_000 },
+                    randomKey = { "abcdefghijklmnop" },
+                ).fetchZid(uuid)
+            }
+            val request = server.takeRequest()
+            val cuid = "${md5ForTest(uuid)}|0"
+            val cuidMd5 = md5ForTest(cuid).lowercase(Locale.ROOT)
+            val pathMd5 = md5ForTest(
+                "2000331700000000ea737e4f435b53786043369d2e5ace4f",
+            ).lowercase(Locale.ROOT)
+
+            assertEquals("/c/11/z/100/200033/1700000000/$pathMd5", request.requestUrl?.encodedPath)
+            assertTrue(request.requestUrl?.queryParameter("skey").orEmpty().isNotBlank())
+            assertEquals(cuidMd5, request.getHeader("x-device-id"))
+            assertEquals("src", request.getHeader("x-client-src"))
+            assertEquals("x6/200033/12.35.1.0/4.4.1.3", request.getHeader("User-Agent"))
+            assertEquals("sofire/3.5.9.6", request.getHeader("x-sdk-ver"))
+            assertEquals("x6/4.4.1.3", request.getHeader("x-plu-ver"))
+            assertEquals("com.baidu.tieba/12.35.1.0", request.getHeader("x-app-ver"))
+            assertEquals("33", request.getHeader("x-api-ver"))
+            assertEquals("application/x-www-form-urlencoded", request.getHeader("Content-Type"))
+            assertTrue(request.bodySize > 16)
+        } finally {
+            server.shutdown()
+        }
+    }
 
     @Test
     fun loginCookieParserIsCaseInsensitiveAndKeepsEqualsInValues() {
@@ -315,7 +359,140 @@ class TiebaNetworkTest {
                 ),
                 fields["sign"],
             )
+            assertEquals(fields["sign"]?.uppercase(Locale.ROOT), fields["sign"])
             assertEquals(8, result.userInfo?.contSignNum)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun officialLoginHydrationMatchesTiebaLiteV11InterceptorOutput() = runBlocking {
+        Settings.Secure.putString(context.contentResolver, Settings.Secure.ANDROID_ID, "fixed-android-id")
+        val account = AccountEntity(
+            uid = 7,
+            name = "web-user",
+            nickname = "web-nickname",
+            bduss = "bduss",
+            tbs = "web-tbs",
+            portrait = "",
+            sToken = "stoken",
+            cookie = "BDUSS=bduss; STOKEN=stoken; BAIDUID=baidu=device",
+        )
+        val config = TiebaClientConfig(
+            uuid = "00000000-1111-2222-3333-444444444444",
+            clientId = "fixed-client-id",
+            sampleId = "fixed-sample-id",
+            baiduId = "baidu=device",
+            activeTimestamp = 1_600_000_000_000,
+            firstInstallTime = 1_500_000_000_000,
+            lastUpdateTime = 1_650_000_000_000,
+        )
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"error_code":"0","anti":{"tbs":"official-tbs"},"user":{"id":"9","name":"official-user","portrait":"portrait-token"}}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"error_code":"0","user_info":{"name_show":"官方昵称","tieba_uid":"tieba-9","user_name":"official-user","user_nickname":"官方昵称"}}""",
+            ),
+        )
+        try {
+            val client = TiebaOfficialClient(
+                context = context,
+                gson = Gson(),
+                account = account,
+                config = config,
+                baseUrl = server.url("/").toString(),
+                clock = { 1_700_000_000_000 },
+                stNumber = { 100 },
+                stSizeFactor = { 1.0 },
+            )
+
+            val session = client.login("bduss", "stoken")
+            val loginRequest = server.takeRequest()
+            val initRequest = server.takeRequest()
+            val loginFields = parseFormForTest(loginRequest.body.readUtf8())
+            val initFields = parseFormForTest(initRequest.body.readUtf8())
+
+            assertEquals("/c/s/login", loginRequest.path)
+            assertEquals("bduss|", loginFields["bdusstoken"])
+            assertEquals("stoken", loginFields["stoken"])
+            assertNull(loginFields["BDUSS"])
+            assertNull(loginFields["user_id"])
+            assertEquals("null", loginFields["authsid"])
+            assertEquals("11.10.8.6", loginFields["_client_version"])
+            assertEquals("bdtb for Android 11.10.8.6", loginRequest.getHeader("User-Agent"))
+            assertEquals("ka=open", loginRequest.getHeader("Cookie"))
+            assertNull(loginRequest.getHeader("Charset"))
+            assertNull(loginRequest.getHeader("client_type"))
+
+            assertEquals("/c/s/initNickname", initRequest.path)
+            assertEquals("bduss", initFields["BDUSS"])
+            assertEquals("stoken", initFields["stoken"])
+            assertEquals("11.10.8.6", initFields["_client_version"])
+            assertEquals("ka=open", initRequest.getHeader("Cookie"))
+            assertEquals(9, session.uid)
+            assertEquals("official-user", session.name)
+            assertEquals("官方昵称", session.nickname)
+            assertEquals("official-tbs", session.tbs)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun officialLoginUsesInitNicknameIdentityWhenLoginUserNameIsBlank() = runBlocking {
+        Settings.Secure.putString(context.contentResolver, Settings.Secure.ANDROID_ID, "fixed-android-id")
+        val account = AccountEntity(
+            uid = 7,
+            name = "web-user",
+            nickname = "web-nickname",
+            bduss = "bduss",
+            tbs = "web-tbs",
+            portrait = "web-portrait",
+            sToken = "stoken",
+            cookie = "BDUSS=bduss; STOKEN=stoken",
+        )
+        val config = TiebaClientConfig(
+            uuid = "00000000-1111-2222-3333-444444444444",
+            clientId = null,
+            sampleId = null,
+            baiduId = null,
+            activeTimestamp = 1_600_000_000_000,
+            firstInstallTime = 1_500_000_000_000,
+            lastUpdateTime = 1_650_000_000_000,
+        )
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"error_code":"0","anti":{"tbs":"official-tbs"},"user":{"id":"9","name":"","portrait":"portrait-token"}}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"error_code":"0","user_info":{"name_show":"官方昵称","tieba_uid":"9","user_name":"official-user","user_nickname":"官方昵称"}}""",
+            ),
+        )
+        try {
+            val session = TiebaOfficialClient(
+                context = context,
+                gson = Gson(),
+                account = account,
+                config = config,
+                baseUrl = server.url("/").toString(),
+                clock = { 1_700_000_000_000 },
+                stNumber = { 100 },
+                stSizeFactor = { 1.0 },
+            ).login("bduss", "stoken")
+
+            assertEquals(9, session.uid)
+            assertEquals("official-user", session.name)
+            assertEquals("官方昵称", session.nickname)
+            assertEquals("portrait-token", session.portrait)
+            assertEquals("official-tbs", session.tbs)
         } finally {
             server.shutdown()
         }
@@ -325,6 +502,7 @@ class TiebaNetworkTest {
     fun officialSignResponseRequiresCompleteTiebaLiteUserInfo() {
         val alreadySigned = mapOfficialSignFailure(1101, "已经签到过了")
         val notFollowed = mapOfficialSignFailure(1004, "未关注该吧")
+        val dataFailure = mapOfficialSignFailure(340006, "数据加载失败")
         val success = mapOfficialSignResult(
             TiebaSignResultBean(
                 errorCode = "0",
@@ -347,6 +525,7 @@ class TiebaNetworkTest {
         assertEquals("今日已经签到", alreadySigned.message)
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.FAILED, notFollowed.outcome)
         assertEquals("尚未关注长春工程学院吧", notFollowed.message)
+        assertEquals("数据加载失败（错误码 340006）", dataFailure.message)
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.SUCCESS, success.outcome)
         assertEquals(8, success.signedDays)
         assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.FAILED, invalid.outcome)
@@ -441,14 +620,58 @@ class TiebaNetworkTest {
                 },
             )
 
-            val response = repository.signWithFreshForumState(account)
-            val fields = parseFormForTest(server.takeRequest().body.readUtf8())
+            val response = repository.sign(account, "fresh-forum-tbs")
+            val signRequest = server.takeRequest()
+            val fields = parseFormForTest(signRequest.body.readUtf8())
 
+            assertEquals("/c/c/forum/sign", signRequest.path)
+            assertEquals("7", signRequest.getHeader("client_user_token"))
             assertEquals("fresh-forum-tbs", fields["tbs"])
             assertTrue(fields.values.none { it == "stale-account-tbs" })
             assertEquals(0, supportApi.profileCalls)
             assertEquals(edu.ccit.webvpn.feature.tieba.SignOutcome.SUCCESS, response.outcome)
             assertEquals(9, response.signedDays)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun officialLoginRejectionIdentifiesTheFailedStageAndCode() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"error_code":300004,"error_msg":"数据加载失败"}"""))
+        val account = AccountEntity(
+            uid = 7,
+            name = "user",
+            nickname = "nickname",
+            bduss = "bduss",
+            tbs = "old-tbs",
+            portrait = "",
+            sToken = "stoken",
+            cookie = "BDUSS=bduss; STOKEN=stoken",
+        )
+        try {
+            val error = runCatching {
+                repository(
+                    readApi = FakeTiebaReadApi(successForum(), successThread()),
+                    officialClientFactory = { current, config ->
+                        TiebaOfficialClient(
+                            context,
+                            Gson(),
+                            current,
+                            config,
+                            server.url("/").toString(),
+                            clock = { 1_700_000_000_000 },
+                            stNumber = { 100 },
+                            stSizeFactor = { 1.0 },
+                        )
+                    },
+                ).refreshOfficialAccount(account)
+            }.exceptionOrNull() as TiebaApiException
+
+            assertTrue(error.message.contains("贴吧官方登录校验失败"))
+            assertTrue(error.message.contains("300004"))
+            assertEquals("/c/s/login", server.takeRequest().path)
         } finally {
             server.shutdown()
         }
@@ -646,6 +869,7 @@ class TiebaNetworkTest {
             officialClientFactory = officialClientFactory ?: { account, config ->
                 TiebaOfficialClient(context, Gson(), account, config)
             },
+            zidProvider = { "test-zid" },
         )
     }
 
@@ -764,7 +988,7 @@ class TiebaNetworkTest {
 
 private fun md5ForTest(value: String): String = java.security.MessageDigest.getInstance("MD5")
     .digest(value.toByteArray(Charsets.UTF_8))
-    .joinToString("") { "%02x".format(it) }
+    .joinToString("") { "%02X".format(Locale.ROOT, it.toInt() and 0xFF) }
 
 private fun parseFormForTest(raw: String): LinkedHashMap<String, String> = linkedMapOf<String, String>().apply {
     raw.split('&').filter(String::isNotEmpty).forEach { entry ->

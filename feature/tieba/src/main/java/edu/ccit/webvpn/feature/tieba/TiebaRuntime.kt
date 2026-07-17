@@ -82,7 +82,7 @@ class TiebaRuntime private constructor(context: Context) {
             val preferences = settings.preferences.first()
             val current = accountDao.get()
             if (!preferences.sign.enabled || current == null || !shouldAutoSign(preferences.sign.lastRunAt)) return
-            performSign(current)
+            performSign(current, forumTbs = null, refreshOfficialAccount = true)
         }
     }
 
@@ -91,13 +91,31 @@ class TiebaRuntime private constructor(context: Context) {
         if (current == null) {
             return@withLock SignResponse(SignOutcome.FAILED, "请先登录贴吧账号")
         }
-        performSign(current, forumTbs)
+        // TiebaLite's forum button passes the anti.tbs from the currently displayed FRS response.
+        performSign(current, forumTbs = forumTbs, refreshOfficialAccount = false)
     }
 
-    private suspend fun performSign(current: AccountEntity, forumTbs: String? = null): SignResponse {
+    private suspend fun performSign(
+        current: AccountEntity,
+        forumTbs: String?,
+        refreshOfficialAccount: Boolean,
+    ): SignResponse {
         _signState.value = TiebaSignState.Running
         val response = runCatching {
-            if (forumTbs == null) network.signWithFreshForumState(current) else network.sign(current, forumTbs)
+            var signingAccount = current
+            var signingTbs = forumTbs
+            if (refreshOfficialAccount || current.zid.isNullOrBlank()) {
+                signingAccount = network.refreshOfficialAccount(current)
+                accountDao.replace(signingAccount)
+                signingTbs = if (refreshOfficialAccount || forumTbs.isNullOrBlank()) {
+                    signingAccount.tbs
+                } else {
+                    // Existing installs did not persist TiebaLite's z_id. Once repaired, obtain
+                    // the FRS anti.tbs with that same identity before the first write.
+                    network.refreshForumTbs(signingAccount)
+                }
+            }
+            network.sign(signingAccount, signingTbs.orEmpty())
         }
             .getOrElse { error -> SignResponse(SignOutcome.FAILED, error.message ?: "签到失败") }
         settings.recordSign(response.outcome, response.message)

@@ -34,6 +34,7 @@ import com.huanchengfly.tieba.post.api.models.protos.addPost.AddPostResponse
 import com.huanchengfly.tieba.post.utils.helios.Base32
 import com.huanchengfly.tieba.post.utils.helios.Hasher
 import com.squareup.wire.Message
+import edu.ccit.webvpn.feature.tieba.data.TiebaClientConfig
 import java.io.EOFException
 import java.io.IOException
 import java.net.ConnectException
@@ -46,6 +47,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.net.ssl.SSLHandshakeException
+import kotlin.math.roundToInt
 import okhttp3.Interceptor
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -128,54 +130,68 @@ internal class TiebaClientIdentity(context: Context) {
         .orEmpty().ifBlank { "000" }
     private val packageInfo = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
     private val installationSeed = "$androidId:${appContext.packageName}"
-    private val stableSuffix = md5(installationSeed).take(3).toInt(16) % 1000
     private val rawCuid = md5("com.baidu$androidId").uppercase(Locale.ROOT)
 
-    val cuid: String = "$rawCuid|V${Base32.encode(Hasher.hash(rawCuid.toByteArray()))}"
-    val aid: String = run {
+    private val fallbackCuid: String = "$rawCuid|V${Base32.encode(Hasher.hash(rawCuid.toByteArray()))}"
+    private val fallbackAid: String = run {
         val uuid = java.util.UUID.nameUUIDFromBytes(installationSeed.toByteArray()).toString()
         val encoded = Base32.encode(sha1("com.helios$androidId$uuid"))
         val rawAid = "A00-$encoded-"
         "$rawAid${Base32.encode(Hasher.hash(rawAid.toByteArray()))}"
     }
-    val clientId: String = "wappc_${packageInfo.firstInstallTime}_$stableSuffix"
-    val activeTimestamp: Long = System.currentTimeMillis()
-    val clientLogId: String = activeTimestamp.toString()
-    val firstInstallTime: Long = packageInfo.firstInstallTime
-    val lastUpdateTime: Long = packageInfo.lastUpdateTime
+    private val fallbackClientId: String = "wappc_${System.currentTimeMillis()}_${(Math.random() * 1000).roundToInt()}"
+    private val fallbackActiveTimestamp: Long = System.currentTimeMillis()
+    @Volatile private var sharedState: SharedIdentityState? = null
+
+    val cuid: String get() = sharedState?.identity?.cuid ?: fallbackCuid
+    val aid: String get() = sharedState?.identity?.aid ?: fallbackAid
+    val clientId: String get() = sharedState?.config?.clientId ?: fallbackClientId
+    val activeTimestamp: Long get() = sharedState?.config?.activeTimestamp ?: fallbackActiveTimestamp
+    val clientLogId: String get() = activeTimestamp.toString()
+    val firstInstallTime: Long get() = sharedState?.config?.firstInstallTime ?: packageInfo.firstInstallTime
+    val lastUpdateTime: Long get() = sharedState?.config?.lastUpdateTime ?: packageInfo.lastUpdateTime
     val userAgent: String = "$DEFAULT_USER_AGENT tieba/$TIEBA_V12_VERSION"
+
+    fun applyClientConfig(config: TiebaClientConfig) {
+        sharedState = SharedIdentityState(config, TiebaOfficialIdentity.create(appContext, config.uuid))
+    }
 
     fun commonRequest(
         credentials: TiebaReadCredentials?,
         clientVersion: String = TIEBA_V12_VERSION,
         tbs: String? = null,
         postMode: Boolean = false,
+        clientConfig: TiebaClientConfig? = null,
     ): CommonRequest {
+        clientConfig?.let(::applyClientConfig)
+        val state = sharedState
+        val currentConfig = state?.config
+        val currentIdentity = state?.identity
         val metrics = appContext.resources.displayMetrics
         return CommonRequest(
             BDUSS = credentials?.bduss,
-            _client_id = clientId,
+            _client_id = currentConfig?.clientId ?: fallbackClientId,
             _client_type = 2,
             _client_version = clientVersion,
             _os_version = Build.VERSION.SDK_INT.toString(),
-            _phone_imei = "",
+            _phone_imei = "000000000000000",
             _timestamp = System.currentTimeMillis(),
-            active_timestamp = firstInstallTime,
-            android_id = if (postMode) androidId else Base64.encodeToString(androidId.toByteArray(), Base64.NO_WRAP),
+            active_timestamp = currentConfig?.activeTimestamp ?: fallbackActiveTimestamp,
+            android_id = if (postMode) androidId else Base64.encodeToString(androidId.toByteArray(), Base64.DEFAULT),
             applist = "".takeIf { postMode },
             brand = Build.BRAND,
-            c3_aid = aid,
+            c3_aid = currentIdentity?.aid ?: fallbackAid,
             cmode = 1,
-            cuid = cuid,
-            cuid_galaxy2 = cuid,
+            cuid = currentIdentity?.cuid ?: fallbackCuid,
+            cuid_galaxy2 = currentIdentity?.cuid ?: fallbackCuid,
             cuid_gid = "",
             event_day = SimpleDateFormat("yyyyMdd", Locale.getDefault()).format(Date()),
             extra = "",
-            first_install_time = firstInstallTime,
+            first_install_time = currentConfig?.firstInstallTime ?: packageInfo.firstInstallTime,
             framework_ver = "3340042",
             from = "1020031h",
             is_teenager = 0,
-            last_update_time = lastUpdateTime,
+            last_update_time = currentConfig?.lastUpdateTime ?: packageInfo.lastUpdateTime,
             lego_lib_version = "3.0.0",
             model = Build.MODEL,
             net_type = 1,
@@ -183,7 +199,7 @@ internal class TiebaClientIdentity(context: Context) {
             personalized_rec_switch = 1,
             pversion = "1.0.3",
             q_type = 0,
-            sample_id = null,
+            sample_id = currentConfig?.sampleId,
             scr_dip = metrics.density.toDouble(),
             scr_h = metrics.heightPixels,
             scr_w = metrics.widthPixels,
@@ -202,6 +218,11 @@ internal class TiebaClientIdentity(context: Context) {
     private fun sha1(value: String): ByteArray = digest("SHA-1", value)
     private fun digest(algorithm: String, value: String): ByteArray =
         MessageDigest.getInstance(algorithm).digest(value.toByteArray(StandardCharsets.UTF_8))
+
+    private data class SharedIdentityState(
+        val config: TiebaClientConfig,
+        val identity: TiebaOfficialIdentity,
+    )
 }
 
 internal class TiebaReadRequestFactory(
@@ -216,6 +237,7 @@ internal class TiebaReadRequestFactory(
         goodOnly: Boolean,
         loadType: Int,
         credentials: TiebaReadCredentials?,
+        clientConfig: TiebaClientConfig? = null,
     ): RequestBody = protobufBody(
         FrsPageRequest(
             FrsPageRequestData(
@@ -224,7 +246,7 @@ internal class TiebaReadRequestFactory(
                 call_from = 0,
                 category_id = 0,
                 cid = 0,
-                common = identity.commonRequest(credentials),
+                common = identity.commonRequest(credentials, clientConfig = clientConfig),
                 ctime = 0,
                 data_size = 0,
                 hot_thread_id = 0,
@@ -262,10 +284,11 @@ internal class TiebaReadRequestFactory(
         credentials: TiebaReadCredentials?,
         postId: Long = 0,
         forumId: Long = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID,
+        clientConfig: TiebaClientConfig? = null,
     ): RequestBody = protobufBody(
         PbPageRequest(
             PbPageRequestData(
-                common = identity.commonRequest(credentials),
+                common = identity.commonRequest(credentials, clientConfig = clientConfig),
                 kz = threadId,
                 pid = postId,
                 pn = page,
@@ -320,10 +343,11 @@ internal class TiebaReadRequestFactory(
         subPostId: Long,
         credentials: TiebaReadCredentials?,
         forumId: Long = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID,
+        clientConfig: TiebaClientConfig? = null,
     ): RequestBody = protobufBody(
         PbFloorRequest(
             PbFloorRequestData(
-                common = identity.commonRequest(credentials),
+                common = identity.commonRequest(credentials, clientConfig = clientConfig),
                 forum_id = forumId,
                 kz = threadId,
                 pid = postId,
@@ -340,7 +364,11 @@ internal class TiebaReadRequestFactory(
         includeSToken = false,
     )
 
-    fun profile(uid: Long, credentials: TiebaReadCredentials?): RequestBody {
+    fun profile(
+        uid: Long,
+        credentials: TiebaReadCredentials?,
+        clientConfig: TiebaClientConfig? = null,
+    ): RequestBody {
         val self = credentials?.uid == uid
         return protobufBody(
             ProfileRequest(
@@ -352,7 +380,7 @@ internal class TiebaReadRequestFactory(
                     pn = 1,
                     rn = 20,
                     has_plist = 1,
-                    common = identity.commonRequest(credentials),
+                    common = identity.commonRequest(credentials, clientConfig = clientConfig),
                     scr_w = metrics.widthPixels,
                     scr_h = metrics.heightPixels,
                     q_type = 0,
@@ -372,6 +400,7 @@ internal class TiebaReadRequestFactory(
         page: Int,
         isThread: Boolean,
         credentials: TiebaReadCredentials?,
+        clientConfig: TiebaClientConfig? = null,
     ): RequestBody = protobufBody(
         UserPostRequest(
             UserPostRequestData(
@@ -381,7 +410,7 @@ internal class TiebaReadRequestFactory(
                 need_content = 1,
                 subtype = 0.takeUnless { isThread },
                 pn = page,
-                common = identity.commonRequest(credentials),
+                common = identity.commonRequest(credentials, clientConfig = clientConfig),
                 scr_w = metrics.widthPixels,
                 scr_h = metrics.heightPixels,
                 scr_dip = metrics.density.toDouble(),
@@ -393,11 +422,15 @@ internal class TiebaReadRequestFactory(
         includeSToken = true,
     )
 
-    fun forumRule(forumId: Long, credentials: TiebaReadCredentials?): RequestBody = protobufBody(
+    fun forumRule(
+        forumId: Long,
+        credentials: TiebaReadCredentials?,
+        clientConfig: TiebaClientConfig? = null,
+    ): RequestBody = protobufBody(
         ForumRuleDetailRequest(
             ForumRuleDetailRequestData(
                 forum_id = forumId,
-                common = identity.commonRequest(credentials),
+                common = identity.commonRequest(credentials, clientConfig = clientConfig),
             ),
         ),
         credentials = credentials,
@@ -416,6 +449,7 @@ internal class TiebaReadRequestFactory(
         nickname: String,
         tbs: String,
         credentials: TiebaReadCredentials,
+        clientConfig: TiebaClientConfig? = null,
     ): RequestBody = protobufBody(
         AddPostRequest(
             AddPostRequestData(
@@ -427,6 +461,7 @@ internal class TiebaReadRequestFactory(
                     clientVersion = TIEBA_V12_POST_VERSION,
                     tbs = tbs,
                     postMode = true,
+                    clientConfig = clientConfig,
                 ),
                 content = content,
                 entrance_type = "0",
@@ -531,7 +566,7 @@ internal fun tiebaReadHeaderInterceptor(context: Context, identity: TiebaClientI
         .removeHeader(TRACE_HEADER)
         .header("Charset", "UTF-8")
         .header("client_type", "2")
-        .header("cookie", "ka=open; CUID=${identity.cuid}; TBBRAND=${Build.MODEL}")
+        .header("cookie", "ka:open; CUID:${identity.cuid}; TBBRAND:${Build.MODEL}")
         .header("cuid", identity.cuid)
         .header("cuid_galaxy2", identity.cuid)
         .header("cuid_gid", "")

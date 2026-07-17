@@ -12,6 +12,7 @@ import com.huanchengfly.tieba.post.api.models.protos.profile.ProfileRequest
 import com.huanchengfly.tieba.post.api.models.protos.userPost.UserPostRequest
 import com.huanchengfly.tieba.post.api.models.protos.addPost.AddPostRequest
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
+import edu.ccit.webvpn.feature.tieba.data.TiebaClientConfig
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.MultipartBody
@@ -27,6 +28,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import android.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 class TiebaWireTest {
@@ -63,6 +65,53 @@ class TiebaWireTest {
         assertEquals("bduss", message.data_?.common?.BDUSS)
         assertEquals("stoken", message.data_?.common?.stoken)
         assertNotNull(multipart.parts.firstOrNull { it.headers?.get("Content-Disposition")?.contains("stoken") == true })
+    }
+
+    @Test
+    fun `frs and official sign share the persisted TiebaLite client identity`() {
+        val config = TiebaClientConfig(
+            uuid = "shared-client-uuid",
+            clientId = "shared-client-id",
+            sampleId = "shared-sample-id",
+            baiduId = "shared-baidu-id",
+            activeTimestamp = 1_700_000_000_123,
+            firstInstallTime = 1_600_000_000_000,
+            lastUpdateTime = 1_650_000_000_000,
+        )
+        val expectedIdentity = TiebaOfficialIdentity.create(context, config.uuid)
+        val multipart = requests.forum(
+            page = 1,
+            sortType = 0,
+            goodOnly = false,
+            loadType = 1,
+            credentials = TiebaReadCredentials(7, "bduss", "stoken", "shared-zid"),
+            clientConfig = config,
+        ) as MultipartBody
+        val common = FrsPageRequest.ADAPTER.decode(multipart.dataPart()).data_?.common
+
+        assertEquals(expectedIdentity.cuid, common?.cuid)
+        assertEquals(expectedIdentity.cuid, common?.cuid_galaxy2)
+        assertEquals(expectedIdentity.aid, common?.c3_aid)
+        assertEquals("shared-client-id", common?._client_id)
+        assertEquals("shared-sample-id", common?.sample_id)
+        assertEquals("000000000000000", common?._phone_imei)
+        assertEquals("shared-zid", common?.z_id)
+        assertEquals(
+            Base64.encodeToString(
+                android.provider.Settings.Secure.getString(
+                    context.contentResolver,
+                    android.provider.Settings.Secure.ANDROID_ID,
+                ).orEmpty().ifBlank { "000" }.toByteArray(),
+                Base64.DEFAULT,
+            ),
+            common?.android_id,
+        )
+        assertEquals(1_700_000_000_123, common?.active_timestamp)
+        assertEquals(1_600_000_000_000, common?.first_install_time)
+        assertEquals(1_650_000_000_000, common?.last_update_time)
+        assertEquals(expectedIdentity.cuid, identity.cuid)
+        assertEquals(expectedIdentity.aid, identity.aid)
+        assertEquals("shared-client-id", identity.clientId)
     }
 
     @Test
@@ -166,6 +215,7 @@ class TiebaWireTest {
         assertEquals("/c/f/frs/page?cmd=301001", recorded?.path)
         assertEquals("protobuf", recorded?.getHeader("x_bd_data_type"))
         assertEquals("2", recorded?.getHeader("client_type"))
+        assertEquals("ka:open; CUID:${identity.cuid}; TBBRAND:${android.os.Build.MODEL}", recorded?.getHeader("cookie"))
         assertEquals(TiebaReadRequestFactory.encodedForumName(), recorded?.getHeader("forum_name"))
         assertNull(recorded?.getHeader("X-CCIT-Tieba-Request"))
     }

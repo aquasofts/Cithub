@@ -5,11 +5,50 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.14`
-- Version code: `20`
+- Version name: `2.1.21`
+- Version code: `27`
 - Updated: 2026-07-17
 
 ## Changes
+
+### 2.1.21 (versionCode 27) — 2026-07-17
+
+- Fixed Performance-build Tieba login failing before official authentication because R8 optimized the Gson-reflected Sofire ZID response into an abstract class.
+- Preserved the complete Sofire request and encrypted-response model family so minified builds can obtain and decode `z_id` reliably.
+
+### 2.1.20 (versionCode 26) — 2026-07-17
+
+- Refreshed the installable Performance packages with the current TiebaLite-compatible official login, Sofire ZID, FRS identity, and forum sign-in fixes.
+
+### 2.1.19 (versionCode 25) — 2026-07-17
+
+- Matched TiebaLite's `MD5Util` exactly by emitting uppercase hexadecimal request signatures; the previous lowercase signature was accepted by login but rejected by the forum sign endpoint with error `300004`.
+- Added an independent uppercase MD5 test vector and a final-form assertion so request tests can no longer reproduce the same casing bug as the implementation.
+- Copied TiebaLite's Sofire x6 ZID handshake and now persist the returned `z_id` before official login and authenticated FRS requests.
+- Matched TiebaLite's V12 FRS identity fields exactly, including its IMEI fallback, Base64 mode, random fallback client ID, and cookie wire format.
+- Manual forum sign-in now passes the current FRS `anti.tbs` straight to TiebaLite's V11 `signFlow`; automatic sign-in uses the refreshed official account TBS.
+
+### 2.1.18 (versionCode 24) — 2026-07-17
+
+- Fixed successful official Tieba logins being rejected when `/c/s/login` returns an empty `user.name`, matching TiebaLite's error-code-only acceptance instead of imposing a stricter custom field check.
+- Account hydration now resolves the username from `/c/s/initNickname` and the already authenticated web profile when the login payload omits it, while still requiring the fresh official `anti.tbs`.
+- Added a regression test for the real code-0 response shape with a blank login username.
+
+### 2.1.17 (versionCode 23) — 2026-07-17
+
+- Fixed Performance-build Tieba login failure by preserving `TiebaOfficialApi` suspend signatures and all Gson-reflected official login, nickname, sign, sync, and common response models from unsafe R8 full-mode optimization.
+- Added post-minification verification of the official Retrofit contract and concrete response types alongside the existing sign-in protocol tests.
+
+### 2.1.16 (versionCode 22) — 2026-07-17
+
+- Ported TiebaLite's official `/c/s/login` and `/c/s/initNickname` account-hydration sequence, including its FormBody drop-parameter behavior, so WebView cookies are validated as an official mobile session before sign-in.
+- Manual and automatic sign-in now refresh the official UID/TBS state and an authenticated FRS response immediately before calling `/c/c/forum/sign`, preventing anonymous page fallbacks from supplying write credentials.
+- Added stage-specific, credential-free diagnostics for official-login rejection such as Tieba error `300004`.
+
+### 2.1.15 (versionCode 21) — 2026-07-17
+
+- Unified FRS and official sign-in under the same persisted TiebaLite CUID, AID, client ID, sample ID, and client timestamps so `anti.tbs` is consumed by the identity that requested it.
+- Included the numeric Tieba service code in unknown sign-in errors to make any remaining server rejection diagnosable without logging credentials or signatures.
 
 ### 2.1.14 (versionCode 20) — 2026-07-17
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.Settings
 import android.util.Base64
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.annotations.SerializedName
@@ -39,6 +40,38 @@ import retrofit2.http.POST
  */
 internal interface TiebaOfficialApi {
     @Headers(
+        "Cookie: ka=open",
+        "$DROP_HEADERS_HEADER: Charset,client_type",
+        "$NO_COMMON_PARAMS_HEADER: BDUSS",
+    )
+    @POST("c/s/initNickname")
+    @FormUrlEncoded
+    suspend fun initNickNameFlow(
+        @Field("BDUSS") bduss: String,
+        @Field("stoken") sToken: String,
+        @Field("_client_version") clientVersion: String = TIEBA_LITE_SIGN_VERSION,
+        @Header("User-Agent") userAgent: String = "bdtb for Android $clientVersion",
+    ): TiebaInitNickNameBean
+
+    @Headers(
+        "Cookie: ka=open",
+        "$DROP_HEADERS_HEADER: Charset,client_type",
+        "$DROP_PARAMS_HEADER: BDUSS",
+    )
+    @POST("c/s/login")
+    @FormUrlEncoded
+    suspend fun loginFlow(
+        @Field("bdusstoken") bdussToken: String,
+        @Field("stoken") sToken: String,
+        @Field("user_id") userId: String? = null,
+        @Field("channel_id") channelId: String = "",
+        @Field("channel_uid") channelUid: String = "",
+        @Field("_client_version") clientVersion: String = TIEBA_LITE_SIGN_VERSION,
+        @Header("User-Agent") userAgent: String = "bdtb for Android $clientVersion",
+        @Field("authsid") authSid: String = "null",
+    ): TiebaLoginBean
+
+    @Headers(
         "$FORCE_LOGIN_HEADER: true",
         "Cookie: ka=open",
         "$DROP_HEADERS_HEADER: Charset,client_type",
@@ -66,6 +99,40 @@ internal interface TiebaOfficialApi {
         @Header("Cookie") cookie: String,
     ): TiebaSyncBean
 }
+
+internal data class TiebaLoginBean(
+    val anti: Anti? = null,
+    @SerializedName("error_code") val errorCode: String? = null,
+    val user: User? = null,
+) {
+    data class Anti(val tbs: String? = null)
+
+    data class User(
+        val id: String? = null,
+        val name: String? = null,
+        val portrait: String? = null,
+    )
+}
+
+internal data class TiebaInitNickNameBean(
+    @SerializedName("error_code") val errorCode: String? = null,
+    @SerializedName("user_info") val userInfo: UserInfo? = null,
+) {
+    data class UserInfo(
+        @SerializedName("name_show") val nameShow: String? = null,
+        @SerializedName("tieba_uid") val tiebaUid: String? = null,
+        @SerializedName("user_name") val userName: String? = null,
+        @SerializedName("user_nickname") val userNickname: String? = null,
+    )
+}
+
+internal data class TiebaOfficialSession(
+    val uid: Long,
+    val name: String,
+    val nickname: String,
+    val portrait: String,
+    val tbs: String,
+)
 
 internal data class TiebaSignResultBean(
     @SerializedName("user_info") val userInfo: UserInfo? = null,
@@ -215,6 +282,43 @@ internal class TiebaOfficialClient(
         return api.signFlow(forumId, forumName, tbs, current.uid.toString())
     }
 
+    /** Exact TiebaLite account hydration sequence used after WebView cookie login. */
+    suspend fun login(bduss: String, sToken: String): TiebaOfficialSession {
+        val login = api.loginFlow("$bduss|", sToken, null)
+        val nickname = api.initNickNameFlow(bduss, sToken)
+        val user = login.user
+        val info = nickname.userInfo
+            ?: throw TiebaApiException(0, "贴吧官方昵称响应缺少用户信息")
+        val uid = user?.id?.toLongOrNull()?.takeIf { it > 0 }
+            ?: info.tiebaUid?.toLongOrNull()?.takeIf { it > 0 }
+            ?: account?.uid?.takeIf { it > 0 }
+            ?: throw TiebaApiException(0, "贴吧官方登录响应缺少用户 ID")
+        val name = user?.name?.takeIf(String::isNotBlank)
+            ?: info.userName?.takeIf(String::isNotBlank)
+            ?: account?.name?.takeIf(String::isNotBlank)
+            ?: info.nameShow?.takeIf(String::isNotBlank)
+            ?: info.userNickname?.takeIf(String::isNotBlank)
+            ?: throw TiebaApiException(0, "贴吧官方登录响应缺少用户名")
+        val tbs = login.anti?.tbs?.takeIf(String::isNotBlank)
+            ?: throw TiebaApiException(0, "贴吧官方登录响应缺少 TBS")
+        if (user?.name.isNullOrBlank()) {
+            Log.w(
+                "TiebaLogin",
+                "official login returned blank user.name; " +
+                    "hasInitUserName=${!info.userName.isNullOrBlank()} hasProfileName=${!account?.name.isNullOrBlank()}",
+            )
+        }
+        return TiebaOfficialSession(
+            uid = uid,
+            name = name,
+            nickname = info.nameShow?.takeIf(String::isNotBlank)
+                ?: info.userNickname?.takeIf(String::isNotBlank)
+                ?: name,
+            portrait = user?.portrait.orEmpty(),
+            tbs = tbs,
+        )
+    }
+
     suspend fun sync(): TiebaSyncBean = api.sync(
         fields = syncFields(appContext, config),
         cookie = config.baiduId?.let { "ka=open;BAIDUID=$it" } ?: "ka=open",
@@ -319,6 +423,8 @@ private object DropInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         var headers = request.headers
+        var url = request.url
+        var body = request.body
         val dropHeaders = headers[DROP_HEADERS_HEADER]
         if (dropHeaders != null) {
             headers = headers.newBuilder().apply {
@@ -326,7 +432,26 @@ private object DropInterceptor : Interceptor {
                 dropHeaders.split(',').forEach(::removeAll)
             }.build()
         }
-        return chain.proceed(request.newBuilder().headers(headers).build())
+        val dropParamsHeader = headers[DROP_PARAMS_HEADER]
+        if (dropParamsHeader != null) {
+            headers = headers.newBuilder().removeAll(DROP_PARAMS_HEADER).build()
+            val dropParams = dropParamsHeader.split(',')
+            if (request.method == "GET") {
+                url = request.url.newBuilder().apply {
+                    dropParams.forEach(::removeAllQueryParameters)
+                }.build()
+            } else if (body is FormBody) {
+                val oldBody = body
+                body = FormBody.Builder().apply {
+                    repeat(oldBody.size) {
+                        if (oldBody.name(it) !in dropParams) add(oldBody.name(it), oldBody.value(it))
+                    }
+                }.build()
+            }
+        }
+        return chain.proceed(
+            request.newBuilder().headers(headers).url(url).method(request.method, body).build(),
+        )
     }
 }
 
@@ -404,7 +529,7 @@ internal fun JsonElement?.tiebaErrorMessage(): String = when {
 
 private fun md5Official(value: String): String = MessageDigest.getInstance("MD5")
     .digest(value.toByteArray(StandardCharsets.UTF_8))
-    .joinToString("") { "%02x".format(it) }
+    .joinToString("") { "%02X".format(Locale.ROOT, it.toInt() and 0xFF) }
 
 private fun sha1Official(value: String): ByteArray = MessageDigest.getInstance("SHA-1")
     .digest(value.toByteArray(StandardCharsets.UTF_8))
@@ -413,4 +538,5 @@ internal const val TIEBA_LITE_SIGN_VERSION = "11.10.8.6"
 private const val TIEBA_LITE_OFFICIAL_VERSION = "12.41.7.1"
 private const val FORCE_LOGIN_HEADER = "force_login"
 private const val DROP_HEADERS_HEADER = "drop_headers"
+private const val DROP_PARAMS_HEADER = "drop_params"
 private const val NO_COMMON_PARAMS_HEADER = "no_common_params"

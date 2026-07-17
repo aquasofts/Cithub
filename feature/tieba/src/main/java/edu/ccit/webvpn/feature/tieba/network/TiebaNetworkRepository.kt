@@ -200,7 +200,10 @@ internal fun mapOfficialSignResult(result: TiebaSignResultBean): SignResponse {
 internal fun mapOfficialSignFailure(code: Int, message: String): SignResponse = when {
     code == 1101 || message.contains("已签") -> SignResponse(SignOutcome.ALREADY_SIGNED, "今日已经签到")
     code == 1004 || message.contains("未关注") -> SignResponse(SignOutcome.FAILED, "尚未关注长春工程学院吧")
-    else -> SignResponse(SignOutcome.FAILED, message.ifBlank { "签到失败（$code）" })
+    else -> SignResponse(
+        SignOutcome.FAILED,
+        message.takeIf(String::isNotBlank)?.let { "$it（错误码 $code）" } ?: "签到失败（错误码 $code）",
+    )
 }
 
 private data class UploadPictureEnvelope(
@@ -225,6 +228,9 @@ class TiebaNetworkRepository internal constructor(
     private val settings: TiebaSettingsRepository,
     private val officialClientFactory: (AccountEntity?, TiebaClientConfig) -> TiebaOfficialClient = { account, config ->
         TiebaOfficialClient(context, gson, account, config)
+    },
+    private val zidProvider: suspend (TiebaClientConfig) -> String = { config ->
+        TiebaSofireClient(gson = gson).fetchZid(config.uuid)
     },
 ) {
     private val identity = TiebaClientIdentity(context)
@@ -381,6 +387,7 @@ class TiebaNetworkRepository internal constructor(
         val body = content.trim()
         if (body.isBlank() || threadId <= 0 || forumId <= 0) throw TiebaReadFailure.Data()
         val credentials = account.toReadCredentials()
+        val clientConfig = settings.clientConfig(account.cookie.cookieValue("BAIDUID"))
         val response = readApi.addPost(
             body = readRequests.addPost(
                 content = if (subPostId != null) {
@@ -397,6 +404,7 @@ class TiebaNetworkRepository internal constructor(
                 nickname = account.nickname,
                 tbs = account.tbs,
                 credentials = credentials,
+                clientConfig = clientConfig,
             ),
             userToken = account.uid.toString(),
         )
@@ -527,7 +535,10 @@ class TiebaNetworkRepository internal constructor(
     }
 
     suspend fun loadForumRule(account: AccountEntity? = null): ForumRule = runRead {
-        val response = readApi.forumRule(readRequests.forumRule(TARGET_FORUM_ID, account?.toReadCredentials()))
+        val clientConfig = settings.clientConfig(account?.cookie?.cookieValue("BAIDUID"))
+        val response = readApi.forumRule(
+            readRequests.forumRule(TARGET_FORUM_ID, account?.toReadCredentials(), clientConfig),
+        )
         val code = response.error?.error_code ?: 0
         if (code != 0) apiFailure("FORUM_RULE", code)
         val data = response.data_ ?: throw TiebaReadFailure.Data()
@@ -546,8 +557,9 @@ class TiebaNetworkRepository internal constructor(
     suspend fun loadUserProfile(uid: Long, account: AccountEntity? = null): TiebaUserProfile = runRead {
         if (uid <= 0) throw TiebaReadFailure.Data()
         val credentials = account?.toReadCredentials()
+        val clientConfig = settings.clientConfig(account?.cookie?.cookieValue("BAIDUID"))
         val response = readWithAnonymousRetry(credentials, { it.errorCode() }) { attempt ->
-            readApi.profile(readRequests.profile(uid, attempt), attempt?.uid?.toString())
+            readApi.profile(readRequests.profile(uid, attempt, clientConfig), attempt?.uid?.toString())
         }
         response.requireSuccess("PROFILE")
         mapUserProfile(response)
@@ -561,8 +573,12 @@ class TiebaNetworkRepository internal constructor(
     ): TiebaUserPostPage = runRead {
         if (uid <= 0 || page < 1) throw TiebaReadFailure.Data()
         val credentials = account?.toReadCredentials()
+        val clientConfig = settings.clientConfig(account?.cookie?.cookieValue("BAIDUID"))
         val response = readWithAnonymousRetry(credentials, { it.errorCode() }) { attempt ->
-            readApi.userPosts(readRequests.userPosts(uid, page, isThread, attempt), attempt?.uid?.toString())
+            readApi.userPosts(
+                readRequests.userPosts(uid, page, isThread, attempt, clientConfig),
+                attempt?.uid?.toString(),
+            )
         }
         response.requireSuccess("USER_POST")
         mapUserPosts(response, page, isThread)
@@ -574,7 +590,8 @@ class TiebaNetworkRepository internal constructor(
         if (response.errorCode != 0 || profile == null || !profile.isLoggedIn) {
             throw IOException(response.errorMessage.ifBlank { "贴吧账号登录状态无效" })
         }
-        return AccountEntity(
+        val config = settings.clientConfig(cookies.baiduId)
+        val provisional = AccountEntity(
             uid = profile.uid,
             name = profile.name,
             nickname = profile.nickname.ifBlank { profile.name },
@@ -587,6 +604,44 @@ class TiebaNetworkRepository internal constructor(
             fans = profile.fans,
             posts = profile.posts,
             concerned = profile.concerned,
+            zid = zidProvider(config),
+        )
+        return refreshOfficialAccount(provisional, cookies.baiduId)
+    }
+
+    /**
+     * TiebaLite does not treat a successful web profile request as a completed login. It calls
+     * /c/s/login and /c/s/initNickname, then persists the official UID and anti.tbs.
+     */
+    suspend fun refreshOfficialAccount(
+        account: AccountEntity,
+        baiduId: String? = account.cookie.cookieValue("BAIDUID"),
+    ): AccountEntity {
+        val config = settings.clientConfig(baiduId)
+        val current = if (account.zid.isNullOrBlank()) {
+            account.copy(zid = zidProvider(config))
+        } else {
+            account
+        }
+        val session = try {
+            officialClientFactory(current, config).login(current.bduss, current.sToken)
+        } catch (error: TiebaApiException) {
+            Log.w("TiebaSign", "official login refresh failed code=${error.code}")
+            throw TiebaApiException(
+                error.code,
+                error.message.takeIf(String::isNotBlank)
+                    ?.let { "贴吧官方登录校验失败：$it（错误码 ${error.code}）" }
+                    ?: "贴吧官方登录校验失败（错误码 ${error.code}）",
+            )
+        }
+        return current.copy(
+            uid = session.uid,
+            name = session.name,
+            nickname = session.nickname,
+            portrait = session.portrait.takeIf(String::isNotBlank)?.let(::portraitUrl)
+                ?: current.portrait,
+            tbs = session.tbs,
+            lastUpdate = System.currentTimeMillis(),
         )
     }
 
@@ -605,11 +660,7 @@ class TiebaNetworkRepository internal constructor(
             ?: throw IOException("签到凭据无效，请刷新贴吧页面后重试")
     }
 
-    /** Automatic sign-in must consume the anti.tbs from this exact FRS response. */
-    suspend fun signWithFreshForumState(account: AccountEntity): SignResponse =
-        sign(account, refreshForumTbs(account))
-
-    /** Mirrors TiebaLite's OfficialTiebaApi.signFlow and uses FRS data.anti.tbs only. */
+    /** Mirrors TiebaLite's OfficialTiebaApi.signFlow with the TBS supplied by its caller. */
     suspend fun sign(account: AccountEntity, tbs: String): SignResponse {
         if (tbs.isBlank()) return SignResponse(SignOutcome.FAILED, "签到凭据无效，请刷新贴吧页面后重试")
         val config = settings.clientConfig(account.cookie.cookieValue("BAIDUID"))
@@ -633,6 +684,7 @@ class TiebaNetworkRepository internal constructor(
             }
             mapOfficialSignResult(result)
         } catch (error: TiebaApiException) {
+            Log.w("TiebaSign", "service failure code=${error.code}")
             mapOfficialSignFailure(error.code, error.message)
         }
     }
@@ -687,11 +739,14 @@ class TiebaNetworkRepository internal constructor(
         goodOnly: Boolean,
         loadType: Int,
         credentials: TiebaReadCredentials?,
-    ) = readApi.forum(
-        body = readRequests.forum(page, sortType, goodOnly, loadType, credentials),
-        forumName = TiebaReadRequestFactory.encodedForumName(),
-        userToken = credentials?.uid?.toString(),
-    )
+    ): FrsPageResponse {
+        val clientConfig = settings.clientConfig()
+        return readApi.forum(
+            body = readRequests.forum(page, sortType, goodOnly, loadType, credentials, clientConfig),
+            forumName = TiebaReadRequestFactory.encodedForumName(),
+            userToken = credentials?.uid?.toString(),
+        )
+    }
 
     private suspend fun readThread(
         threadId: Long,
@@ -701,18 +756,22 @@ class TiebaNetworkRepository internal constructor(
         focusPostId: Long,
         forumId: Long,
         credentials: TiebaReadCredentials?,
-    ) = readApi.thread(
-        body = readRequests.thread(
-            threadId,
-            page,
-            sortType,
-            onlyOriginalPoster,
-            credentials,
-            postId = focusPostId,
-            forumId = forumId,
-        ),
-        userToken = credentials?.uid?.toString(),
-    )
+    ): PbPageResponse {
+        val clientConfig = settings.clientConfig()
+        return readApi.thread(
+            body = readRequests.thread(
+                threadId,
+                page,
+                sortType,
+                onlyOriginalPoster,
+                credentials,
+                postId = focusPostId,
+                forumId = forumId,
+                clientConfig = clientConfig,
+            ),
+            userToken = credentials?.uid?.toString(),
+        )
+    }
 
     private suspend fun readFloor(
         threadId: Long,
@@ -721,10 +780,21 @@ class TiebaNetworkRepository internal constructor(
         subPostId: Long,
         forumId: Long,
         credentials: TiebaReadCredentials?,
-    ) = readApi.floor(
-        body = readRequests.floor(threadId, postId, page, subPostId, credentials, forumId),
-        userToken = credentials?.uid?.toString(),
-    )
+    ): PbFloorResponse {
+        val clientConfig = settings.clientConfig()
+        return readApi.floor(
+            body = readRequests.floor(
+                threadId = threadId,
+                postId = postId,
+                page = page,
+                subPostId = subPostId,
+                credentials = credentials,
+                forumId = forumId,
+                clientConfig = clientConfig,
+            ),
+            userToken = credentials?.uid?.toString(),
+        )
+    }
 
     private suspend fun <T> readWithAnonymousRetry(
         credentials: TiebaReadCredentials?,
