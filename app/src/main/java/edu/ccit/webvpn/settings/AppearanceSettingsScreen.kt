@@ -2,14 +2,8 @@ package edu.ccit.webvpn.settings
 
 import android.os.Build
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,23 +55,35 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import com.google.android.material.color.utilities.Variant
 import edu.ccit.webvpn.R
+import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
+import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.feature.tieba.ui.TiebaSettingsScreen
 import edu.ccit.webvpn.settings.preference.SegmentedPreference
 import edu.ccit.webvpn.settings.preference.SegmentedPrefsScreen
 import edu.ccit.webvpn.settings.preference.SegmentedTextPrefsScreen
 import edu.ccit.webvpn.settings.preference.preference
+import kotlinx.serialization.Serializable
 
-private const val SettingsHomeRoute = "settings_home"
-private const val ThemeSettingsRoute = "settings_theme"
-private const val UiSettingsRoute = "settings_ui"
-private const val TiebaSettingsRoute = "settings_tieba"
-private const val RssSettingsRoute = "settings_rss"
+@Serializable
+private data object SettingsHomeRoute : NavKey
+
+@Serializable
+private data object ThemeSettingsRoute : NavKey
+
+@Serializable
+private data object UiSettingsRoute : NavKey
+
+@Serializable
+private data object TiebaSettingsRoute : NavKey
+
+@Serializable
+private data object RssSettingsRoute : NavKey
 
 @Composable
 fun AppearanceSettingsScreen(
@@ -90,76 +96,54 @@ fun AppearanceSettingsScreen(
     onThemedIconChange: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
-    val navigator = rememberNavController()
-    val duration = if (reduceEffect) 120 else 220
-    NavHost(
-        navController = navigator,
-        startDestination = SettingsHomeRoute,
+    val backStack = rememberNavBackStack(SettingsHomeRoute)
+    fun navigateSingleTop(route: NavKey) {
+        if (backStack.lastOrNull() != route) backStack.add(route)
+    }
+    NavDisplay(
+        backStack = backStack,
+        onBack = { backStack.removeLastOrNull() },
         modifier = Modifier.fillMaxSize(),
-        enterTransition = {
-            fadeIn(tween(duration, easing = FastOutSlowInEasing)) +
-                scaleIn(
-                    initialScale = if (reduceEffect) 1f else 0.9f,
-                    animationSpec = tween(duration, easing = FastOutSlowInEasing),
-                )
-        },
-        exitTransition = {
-            fadeOut(tween(duration, easing = FastOutSlowInEasing)) +
-                scaleOut(
-                    targetScale = if (reduceEffect) 1f else 1.1f,
-                    animationSpec = tween(duration, easing = FastOutSlowInEasing),
-                )
-        },
-        popEnterTransition = {
-            fadeIn(tween(duration, easing = FastOutSlowInEasing)) +
-                scaleIn(
-                    initialScale = if (reduceEffect) 1f else 1.1f,
-                    animationSpec = tween(duration, easing = FastOutSlowInEasing),
-                )
-        },
-        popExitTransition = {
-            fadeOut(tween(duration, easing = FastOutSlowInEasing)) +
-                scaleOut(
-                    targetScale = if (reduceEffect) 1f else 0.9f,
-                    animationSpec = tween(duration, easing = FastOutSlowInEasing),
-                )
-        },
-    ) {
-        composable(SettingsHomeRoute) {
+        transitionSpec = { ccitForwardNavigationTransition(reduceEffect) },
+        popTransitionSpec = { ccitBackwardNavigationTransition(reduceEffect) },
+        predictivePopTransitionSpec = { ccitBackwardNavigationTransition(reduceEffect) },
+        entryProvider = entryProvider {
+        entry<SettingsHomeRoute> {
             SettingsHomeScreen(
                 onBack = onBack,
-                onTheme = { navigator.navigate(ThemeSettingsRoute) },
-                onUi = { navigator.navigate(UiSettingsRoute) },
-                onRss = { navigator.navigate(RssSettingsRoute) },
-                onTieba = { navigator.navigate(TiebaSettingsRoute) },
+                onTheme = { navigateSingleTop(ThemeSettingsRoute) },
+                onUi = { navigateSingleTop(UiSettingsRoute) },
+                onRss = { navigateSingleTop(RssSettingsRoute) },
+                onTieba = { navigateSingleTop(TiebaSettingsRoute) },
             )
         }
-        composable(ThemeSettingsRoute) {
+        entry<ThemeSettingsRoute> {
             ThemeSettingsScreen(
                 settings = themeSettings,
                 initial = current.theme,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
             )
         }
-        composable(UiSettingsRoute) {
+        entry<UiSettingsRoute> {
             UiSettingsScreen(
                 settings = uiSettings,
                 initial = current.ui,
                 onThemedIconChange = onThemedIconChange,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
             )
         }
-        composable(TiebaSettingsRoute) {
-            TiebaSettingsScreen(onBack = navigator::navigateUp)
+        entry<TiebaSettingsRoute> {
+            TiebaSettingsScreen(onBack = { backStack.removeLastOrNull() })
         }
-        composable(RssSettingsRoute) {
+        entry<RssSettingsRoute> {
             RssSettingsScreen(
                 settings = rssFeedSettings,
                 initial = currentRssFeeds,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
             )
         }
-    }
+        },
+    )
 }
 
 @Composable

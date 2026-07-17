@@ -5,11 +5,17 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.27`
-- Version code: `33`
+- Version name: `2.1.28`
+- Version code: `34`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.28 (versionCode 34) — 2026-07-18
+
+- Migrated every Compose navigation stack to stable Navigation 3 `1.1.4` with serializable typed keys, saved back stacks, unified forward/back animations, and predictive-back transitions.
+- Added long-press saving for the native Tieba original-image viewer, with a confirmation dialog, progress/result feedback, and system-gallery storage under `Pictures/CCIT Academic`.
+- Preserved in-page WebView history while allowing Navigation 3 to own normal and predictive system back gestures once the WebView has no page to return to.
 
 ### 2.1.27 (versionCode 33) — 2026-07-18
 

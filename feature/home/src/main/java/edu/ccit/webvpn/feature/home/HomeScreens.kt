@@ -80,17 +80,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import edu.ccit.webvpn.core.ui.CcitCard
 import edu.ccit.webvpn.core.ui.CcitColors
 import edu.ccit.webvpn.core.ui.LocalReduceMotion
+import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
+import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.core.ui.ccitPlaceholder
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -98,9 +99,14 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.serialization.Serializable
 
-private const val FeedRoute = "feeds"
-private const val ArticleRoute = "article"
+@Serializable
+private data object FeedRoute : NavKey
+
+@Serializable
+private data class ArticleRoute(val articleId: String) : NavKey
+
 private val HomeWindowInsets = WindowInsets(0, 0, 0, 0)
 
 @Composable
@@ -111,7 +117,7 @@ fun HomeRootScreen(
     newsRssUrls: List<String> = DefaultHomeFeedUrls.news,
     modifier: Modifier = Modifier,
 ) {
-    val navigator = rememberNavController()
+    val backStack = rememberNavBackStack(FeedRoute)
     val viewModel: HomeViewModel = viewModel()
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -119,12 +125,15 @@ fun HomeRootScreen(
         viewModel.configure(wechatRssUrls, newsRssUrls)
     }
 
-    NavHost(
-        navController = navigator,
-        startDestination = FeedRoute,
+    NavDisplay(
+        backStack = backStack,
+        onBack = { backStack.removeLastOrNull() },
         modifier = modifier.fillMaxSize(),
-    ) {
-        composable(FeedRoute) {
+        transitionSpec = { ccitForwardNavigationTransition(reduceMotion) },
+        popTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+        predictivePopTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+        entryProvider = entryProvider {
+        entry<FeedRoute> {
             HomeFeedScreen(
                 active = active,
                 reduceMotion = reduceMotion,
@@ -133,28 +142,27 @@ fun HomeRootScreen(
                 onRefresh = viewModel::refresh,
                 onArticle = {
                     viewModel.loadArticleDetail(it.id)
-                    navigator.navigate("$ArticleRoute/${it.id}")
+                    val route = ArticleRoute(it.id)
+                    if (backStack.lastOrNull() != route) backStack.add(route)
                 },
             )
         }
-        composable(
-            "$ArticleRoute/{articleId}",
-            arguments = listOf(navArgument("articleId") { type = NavType.StringType }),
-        ) { entry ->
-            val article = state.article(entry.arguments?.getString("articleId").orEmpty())
+        entry<ArticleRoute> { route ->
+            val article = state.article(route.articleId)
             if (article == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (state.isInitiallyLoading()) {
                         CircularProgressIndicator()
                     } else {
-                        OutlinedButton(onClick = navigator::navigateUp) { Text("返回") }
+                        OutlinedButton(onClick = { backStack.removeLastOrNull() }) { Text("返回") }
                     }
                 }
             } else {
-                ArticleReaderScreen(article = article, onBack = navigator::navigateUp)
+                ArticleReaderScreen(article = article, onBack = { backStack.removeLastOrNull() })
             }
         }
-    }
+        },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -375,6 +383,7 @@ internal fun ArticleReaderScreen(article: HomeArticle, onBack: () -> Unit) {
     var originalMode by remember(article.id) { mutableStateOf(false) }
     var reloadKey by remember(article.id) { mutableStateOf(0) }
     var webView by remember(article.id, originalMode, reloadKey) { mutableStateOf<WebView?>(null) }
+    var canGoBackInWebView by remember(article.id, originalMode, reloadKey) { mutableStateOf(false) }
     var loadState by remember(article.id, originalMode, reloadKey) {
         mutableStateOf<ArticleLoadState>(if (originalMode) ArticleLoadState.Loading else ArticleLoadState.Ready)
     }
@@ -392,9 +401,7 @@ internal fun ArticleReaderScreen(article: HomeArticle, onBack: () -> Unit) {
         }
     }
 
-    BackHandler {
-        if (webView?.canGoBack() == true) webView?.goBack() else onBack()
-    }
+    BackHandler(enabled = canGoBackInWebView) { webView?.goBack() }
     DisposableEffect(article.id) {
         onDispose {
             webView?.apply {
@@ -447,7 +454,11 @@ internal fun ArticleReaderScreen(article: HomeArticle, onBack: () -> Unit) {
                         textColor = textColor,
                         backgroundColor = backgroundColor,
                         linkColor = linkColor,
-                        onWebView = { webView = it },
+                        onWebView = {
+                            webView = it
+                            canGoBackInWebView = false
+                        },
+                        onCanGoBackChange = { canGoBackInWebView = it },
                         onLoadEvent = { event -> loadState = reduceArticleLoadState(loadState, event) },
                         onRequestOriginal = { originalMode = true },
                     )
@@ -558,6 +569,7 @@ private fun SecureArticleWebView(
     backgroundColor: String,
     linkColor: String,
     onWebView: (WebView) -> Unit,
+    onCanGoBackChange: (Boolean) -> Unit,
     onLoadEvent: (ArticleLoadEvent) -> Unit,
     onRequestOriginal: () -> Unit,
 ) {
@@ -608,7 +620,12 @@ private fun SecureArticleWebView(
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {
+                        onCanGoBackChange(view?.canGoBack() == true)
                         onLoadEvent(ArticleLoadEvent.Finished)
+                    }
+
+                    override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                        onCanGoBackChange(view.canGoBack())
                     }
 
                     override fun onReceivedError(

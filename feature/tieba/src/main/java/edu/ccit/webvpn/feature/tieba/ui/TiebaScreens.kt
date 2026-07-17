@@ -1,5 +1,6 @@
 package edu.ccit.webvpn.feature.tieba.ui
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -7,6 +8,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.content.pm.PackageManager
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebView
@@ -19,6 +22,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -145,11 +149,11 @@ import androidx.compose.ui.unit.round
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
+import androidx.core.content.ContextCompat
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
@@ -157,6 +161,9 @@ import coil3.request.ImageRequest
 import coil3.size.SizeResolver
 import edu.ccit.webvpn.core.ui.CcitCard
 import edu.ccit.webvpn.core.ui.CcitColors
+import edu.ccit.webvpn.core.ui.LocalReduceMotion
+import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
+import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.feature.tieba.FloorSort
 import edu.ccit.webvpn.feature.tieba.ForumPage
 import edu.ccit.webvpn.feature.tieba.ForumRule
@@ -182,14 +189,39 @@ import java.time.ZoneId
 import java.util.Date
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.serialization.Serializable
 
-private const val ForumRoute = "forum"
-private const val SearchRoute = "search"
-private const val ThreadRoute = "thread"
-private const val FloorRepliesRoute = "floor_replies"
-private const val ProfileRoute = "profile"
-private const val ImageRoute = "image"
-private const val ForumRuleRoute = "forum_rule"
+@Serializable
+private data object ForumRoute : NavKey
+
+@Serializable
+private data object SearchRoute : NavKey
+
+@Serializable
+private data class ThreadRoute(
+    val id: String,
+    val title: String,
+    val forumId: Long,
+    val forumName: String,
+    val postId: Long = 0,
+) : NavKey
+
+@Serializable
+private data class FloorRepliesRoute(
+    val threadId: String,
+    val postId: String,
+    val forumId: Long,
+    val forumName: String,
+) : NavKey
+
+@Serializable
+private data class ProfileRoute(val uid: Long) : NavKey
+
+@Serializable
+private data object ImageRoute : NavKey
+
+@Serializable
+private data object ForumRuleRoute : NavKey
 private val TiebaWindowInsets = WindowInsets(0, 0, 0, 0)
 
 /** Mirrors TiebaLite's photo-view handoff: the viewer receives the original URL, never the preview URL. */
@@ -294,7 +326,8 @@ private class UserProfileScreenState {
 fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val runtime = remember(context) { TiebaRuntime.get(context) }
-    val navigator = rememberNavController()
+    val reduceMotion = LocalReduceMotion.current
+    val backStack = rememberNavBackStack(ForumRoute)
     var photoViewData by remember { mutableStateOf<PhotoViewData?>(null) }
     val forumState = remember { ForumScreenState() }
     val searchState = remember { SearchScreenState() }
@@ -303,19 +336,24 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     val profileStates = remember { mutableMapOf<Long, UserProfileScreenState>() }
     val forumRuleState = remember { ForumRuleScreenState() }
 
-    fun navigateSingleTop(route: String) {
-        navigator.navigate(route) { launchSingleTop = true }
+    fun navigateSingleTop(route: NavKey) {
+        if (backStack.lastOrNull() != route) backStack.add(route)
     }
 
     fun openThread(thread: ForumThread, focusPostId: Long = 0) {
         navigateSingleTop(
-            "$ThreadRoute/${thread.id}?title=${Uri.encode(thread.title)}" +
-                "&forumId=${thread.forumId}&forumName=${Uri.encode(thread.forumName)}&postId=$focusPostId",
+            ThreadRoute(
+                id = thread.id,
+                title = thread.title,
+                forumId = thread.forumId,
+                forumName = thread.forumName,
+                postId = focusPostId,
+            ),
         )
     }
 
     fun openProfile(uid: Long) {
-        if (uid > 0) navigateSingleTop("$ProfileRoute/$uid")
+        if (uid > 0) navigateSingleTop(ProfileRoute(uid))
     }
 
     fun openReply(target: ContentActionTarget) {
@@ -330,12 +368,15 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
         }
     }
 
-    NavHost(
-        navController = navigator,
-        startDestination = ForumRoute,
+    NavDisplay(
+        backStack = backStack,
+        onBack = { backStack.removeLastOrNull() },
         modifier = modifier.fillMaxSize(),
-    ) {
-        composable(ForumRoute) {
+        transitionSpec = { ccitForwardNavigationTransition(reduceMotion) },
+        popTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+        predictivePopTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+        entryProvider = entryProvider {
+        entry<ForumRoute> {
             ForumScreen(
                 active = active,
                 runtime = runtime,
@@ -346,39 +387,30 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 onRule = { navigateSingleTop(ForumRuleRoute) },
             )
         }
-        composable(ForumRuleRoute) {
+        entry<ForumRuleRoute> {
             ForumRuleScreen(
                 runtime = runtime,
                 state = forumRuleState,
                 forumId = forumState.forum.id.toLongOrNull() ?: 0,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
             )
         }
-        composable(SearchRoute) {
+        entry<SearchRoute> {
             SearchScreen(
                 runtime = runtime,
                 state = searchState,
                 currentForum = forumState.forum,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
                 onThread = ::openThread,
             ) { openProfile(it.authorId) }
         }
-        composable(
-            "$ThreadRoute/{id}?title={title}&forumId={forumId}&forumName={forumName}&postId={postId}",
-            arguments = listOf(
-                navArgument("id") { type = NavType.StringType },
-                navArgument("title") { type = NavType.StringType; defaultValue = "" },
-                navArgument("forumId") { type = NavType.LongType; defaultValue = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID },
-                navArgument("forumName") { type = NavType.StringType; defaultValue = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME },
-                navArgument("postId") { type = NavType.LongType; defaultValue = 0L },
-            ),
-        ) { entry ->
-            val forumId = entry.arguments?.getLong("forumId") ?: edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
-            val forumName = entry.arguments?.getString("forumName").orEmpty().ifBlank { edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME }
-            val threadId = entry.arguments?.getString("id").orEmpty()
-            val focusPostId = entry.arguments?.getLong("postId")?.takeIf { it > 0 }?.toString()
+        entry<ThreadRoute> { route ->
+            val forumId = route.forumId
+            val forumName = route.forumName.ifBlank { edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME }
+            val threadId = route.id
+            val focusPostId = route.postId.takeIf { it > 0 }?.toString()
             val screenState = threadStates.getOrPut("$threadId:${focusPostId.orEmpty()}") {
-                ThreadScreenState(entry.arguments?.getString("title").orEmpty())
+                ThreadScreenState(route.title)
             }
             ThreadScreen(
                 runtime = runtime,
@@ -387,7 +419,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 forumId = forumId,
                 forumName = forumName,
                 focusPostId = focusPostId,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
                 onImage = { data ->
                     photoViewData = data
                     navigateSingleTop(ImageRoute)
@@ -396,48 +428,41 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                     val stateKey = "$threadId:${floor.postId}"
                     floorRepliesStates.getOrPut(stateKey) { FloorRepliesScreenState() }.floor = floor
                     navigateSingleTop(
-                        "$FloorRepliesRoute/${entry.arguments?.getString("id").orEmpty()}/${floor.postId}" +
-                            "?forumId=$forumId&forumName=${Uri.encode(forumName)}",
+                        FloorRepliesRoute(
+                            threadId = route.id,
+                            postId = floor.postId.toString(),
+                            forumId = forumId,
+                            forumName = forumName,
+                        ),
                     )
                 },
                 onProfile = ::openProfile,
                 onReply = ::openReply,
             )
         }
-        composable(
-            "$FloorRepliesRoute/{threadId}/{postId}?forumId={forumId}&forumName={forumName}",
-            arguments = listOf(
-                navArgument("threadId") { type = NavType.StringType },
-                navArgument("postId") { type = NavType.StringType },
-                navArgument("forumId") { type = NavType.LongType; defaultValue = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID },
-                navArgument("forumName") { type = NavType.StringType; defaultValue = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME },
-            ),
-        ) { entry ->
-            val threadId = entry.arguments?.getString("threadId").orEmpty()
-            val postId = entry.arguments?.getString("postId").orEmpty()
+        entry<FloorRepliesRoute> { route ->
+            val threadId = route.threadId
+            val postId = route.postId
             FloorRepliesScreen(
                 runtime = runtime,
                 state = floorRepliesStates.getOrPut("$threadId:$postId") { FloorRepliesScreenState() },
                 threadId = threadId,
                 postId = postId,
-                forumId = entry.arguments?.getLong("forumId") ?: edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID,
-                forumName = entry.arguments?.getString("forumName").orEmpty(),
-                onBack = navigator::navigateUp,
+                forumId = route.forumId,
+                forumName = route.forumName,
+                onBack = { backStack.removeLastOrNull() },
                 onImage = { data -> photoViewData = data; navigateSingleTop(ImageRoute) },
                 onProfile = ::openProfile,
                 onReply = ::openReply,
             )
         }
-        composable(
-            "$ProfileRoute/{uid}",
-            arguments = listOf(navArgument("uid") { type = NavType.LongType }),
-        ) { entry ->
-            val uid = entry.arguments?.getLong("uid") ?: 0
+        entry<ProfileRoute> { route ->
+            val uid = route.uid
             UserProfileScreen(
                 runtime = runtime,
                 state = profileStates.getOrPut(uid) { UserProfileScreenState() },
                 uid = uid,
-                onBack = navigator::navigateUp,
+                onBack = { backStack.removeLastOrNull() },
                 onThread = { post ->
                     openThread(
                         ForumThread(
@@ -451,15 +476,16 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 },
             )
         }
-        composable(ImageRoute) {
+        entry<ImageRoute> {
             val data = photoViewData
             if (data == null || data.picItems.isEmpty()) {
-                LaunchedEffect(Unit) { navigator.navigateUp() }
+                LaunchedEffect(Unit) { backStack.removeLastOrNull() }
             } else {
-                FullImageScreen(runtime, data, navigator::navigateUp)
+                FullImageScreen(runtime, data) { backStack.removeLastOrNull() }
             }
         }
-    }
+        },
+    )
 }
 
 /** Exact TiebaLite official-client dispatch URI, intentionally launched without package checks. */
@@ -2155,6 +2181,7 @@ private fun UserForumList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: () -> Unit) {
     val item = data.picItems.getOrNull(data.index.coerceIn(data.picItems.indices)) ?: return
@@ -2167,7 +2194,30 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
     var loading by remember(item.picId, retry) { mutableStateOf(false) }
     var failed by remember(item.picId, retry) { mutableStateOf(false) }
     var dimensions by remember(item.picId, retry) { mutableStateOf<Pair<Int, Int>?>(null) }
+    var showSaveDialog by remember(item.picId) { mutableStateOf(false) }
+    var saving by remember(item.picId) { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val saveResolvedImage: (String) -> Unit = { url ->
+        if (!saving) {
+            scope.launch {
+                saving = true
+                runCatching { saveTiebaImage(context, runtime, url, item.picId) }
+                    .onSuccess { path -> Toast.makeText(context, "已保存到 $path", Toast.LENGTH_LONG).show() }
+                    .onFailure { error ->
+                        Toast.makeText(context, error.message ?: "图片保存失败", Toast.LENGTH_LONG).show()
+                    }
+                saving = false
+            }
+        }
+    }
+    val legacyStoragePermission = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        if (granted) {
+            resolvedUrl?.let(saveResolvedImage)
+        } else {
+            Toast.makeText(context, "未获得存储权限，无法保存图片", Toast.LENGTH_SHORT).show()
+        }
+    }
     LaunchedEffect(data.data, item.picId, retry) {
         resolving = true
         loading = false
@@ -2199,7 +2249,7 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
                 .build()
         }
     }
-    val transform = rememberTransformableState { zoom, pan, _ ->
+    val transform = rememberTransformableState { _, zoom, pan, _ ->
         scale = (scale * zoom).coerceIn(1f, 6f)
         if (scale == 1f) {
             offsetX = 0f
@@ -2209,7 +2259,6 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
             offsetY += pan.y
         }
     }
-    BackHandler(onBack = onBack)
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         request?.let { originalRequest ->
             AsyncImage(
@@ -2220,7 +2269,13 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
                     scaleY = scale
                     translationX = offsetX
                     translationY = offsetY
-                }.transformable(transform),
+                }.combinedClickable(
+                    onClick = {},
+                    onLongClickLabel = "保存图片",
+                    onLongClick = {
+                        if (resolvedUrl != null && !failed && !saving) showSaveDialog = true
+                    },
+                ).transformable(transform),
                 contentScale = ContentScale.Fit,
                 onLoading = {
                     loading = true
@@ -2272,10 +2327,47 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
             Text(
                 dimensions?.let { (width, height) -> "原图 · ${width} × ${height}" }
                     ?: if (resolving) "正在获取真实原图…" else "正在加载原图…",
+                modifier = Modifier.weight(1f),
                 color = Color.White,
                 style = MaterialTheme.typography.titleSmall,
             )
+            if (saving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                )
+            }
         }
+    }
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("保存图片") },
+            text = { Text("将真实原图保存到系统相册的 CCIT Academic 文件夹？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showSaveDialog = false
+                        val url = resolvedUrl ?: return@TextButton
+                        if (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            saveResolvedImage(url)
+                        } else {
+                            legacyStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        }
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveDialog = false }) { Text("取消") }
+            },
+        )
     }
 }
 
@@ -2349,10 +2441,9 @@ fun TiebaLoginScreen(onBack: () -> Unit, onLoggedIn: () -> Unit) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var canGoBackInWebView by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
-    BackHandler {
-        if (webView?.canGoBack() == true) webView?.goBack() else onBack()
-    }
+    BackHandler(enabled = canGoBackInWebView) { webView?.goBack() }
     Scaffold(
         contentWindowInsets = TiebaWindowInsets,
         topBar = { TopAppBar(title = { Text("登录贴吧账号") }, navigationIcon = { BackButton(onBack) }, windowInsets = TiebaWindowInsets) },
@@ -2372,6 +2463,7 @@ fun TiebaLoginScreen(onBack: () -> Unit, onLoggedIn: () -> Unit) {
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
                                 super.onPageFinished(view, url)
+                                canGoBackInWebView = view.canGoBack()
                                 if (submitting || url == null ||
                                     !(url.startsWith("https://tieba.baidu.com/index/tbwise/") || url.startsWith("https://tiebac.baidu.com/index/tbwise/"))
                                 ) return
@@ -2384,8 +2476,12 @@ fun TiebaLoginScreen(onBack: () -> Unit, onLoggedIn: () -> Unit) {
                                         .onFailure {
                                             submitting = false
                                             snackbar.showSnackbar(it.message ?: "登录失败")
-                                        }
+                                    }
                                 }
+                            }
+
+                            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                                canGoBackInWebView = view.canGoBack()
                             }
                         }
                         loadUrl(LoginUrl)

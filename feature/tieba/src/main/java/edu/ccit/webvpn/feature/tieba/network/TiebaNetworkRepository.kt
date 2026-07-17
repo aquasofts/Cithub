@@ -232,6 +232,11 @@ private data class UploadPictureEnvelope(
 private data class UploadPictureInfo(val originPic: UploadPictureSize? = null)
 private data class UploadPictureSize(val width: String = "0", val height: String = "0")
 
+internal data class TiebaDownloadedImage(
+    val bytes: ByteArray,
+    val mimeType: String?,
+)
+
 class TiebaNetworkRepository internal constructor(
     private val context: Context,
     private val client: OkHttpClient,
@@ -272,6 +277,46 @@ class TiebaNetworkRepository internal constructor(
             ?: throw TiebaReadFailure.Data()
         picture.img.bestQualitySrc().takeIf(::isAuthorizedTiebaImageUrl)
             ?: throw TiebaReadFailure.Data()
+    }
+
+    internal suspend fun downloadImage(url: String): TiebaDownloadedImage {
+        require(isAuthorizedTiebaImageUrl(url)) { "图片地址无效" }
+        val request = Request.Builder()
+            .url(url)
+            .header("Referer", "https://tieba.baidu.com/")
+            .build()
+        return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: IOException) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(e))
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    response.use {
+                        if (!continuation.isActive) return
+                        if (!it.isSuccessful) {
+                            continuation.resumeWith(Result.failure(IOException("HTTP ${it.code}")))
+                            return
+                        }
+                        val body = it.body
+                        if (body == null) {
+                            continuation.resumeWith(Result.failure(IOException("图片响应为空")))
+                            return
+                        }
+                        continuation.resumeWith(
+                            Result.success(
+                                TiebaDownloadedImage(
+                                    bytes = body.bytes(),
+                                    mimeType = body.contentType()?.toString(),
+                                ),
+                            ),
+                        )
+                    }
+                }
+            })
+        }
     }
 
     suspend fun loadForum(

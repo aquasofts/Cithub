@@ -12,12 +12,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -77,17 +71,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.navigation.NavHostController
-import androidx.navigation.NavType
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import edu.ccit.webvpn.core.ui.CcitCard
 import edu.ccit.webvpn.core.ui.CcitColors
 import edu.ccit.webvpn.core.ui.ccitBackground
 import edu.ccit.webvpn.core.ui.CcitOutlinedButton
 import edu.ccit.webvpn.core.ui.CcitPrimaryButton
+import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
+import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.core.academic.EvaluationAnswer
 import edu.ccit.webvpn.core.webvpn.LoginResult
 import edu.ccit.webvpn.core.webvpn.RequiredAccountAction
@@ -102,6 +97,7 @@ import edu.ccit.webvpn.feature.tieba.ui.TiebaLoginScreen
 import edu.ccit.webvpn.feature.tieba.ui.TiebaRootScreen
 import edu.ccit.webvpn.feature.home.HomeRootScreen
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import kotlin.math.roundToInt
 
 internal enum class MainTab(val label: String) {
@@ -111,15 +107,28 @@ internal enum class MainTab(val label: String) {
     Mine("我的"),
 }
 
-private const val AcademicHomeRoute = "academic_home"
-private const val AcademicFeatureRoute = "academic_feature"
-private const val FeatureIdArgument = "featureId"
-private const val MainContentRoute = "main_content"
-private const val AppearanceSettingsRoute = "appearance_settings"
-private const val TiebaLoginRoute = "tieba_login"
+@Serializable
+private data object AcademicHomeRoute : NavKey
 
-private fun academicFeatureRoute(feature: AcademicFeature): String =
-    "$AcademicFeatureRoute/${feature.id}"
+@Serializable
+private data class AcademicFeatureRoute(val featureId: String) : NavKey
+
+@Serializable
+private data object MainContentRoute : NavKey
+
+@Serializable
+private data object AppearanceSettingsRoute : NavKey
+
+@Serializable
+private data object TiebaLoginRoute : NavKey
+
+private fun NavBackStack<NavKey>.navigateSingleTop(route: NavKey) {
+    if (lastOrNull() != route) add(route)
+}
+
+private fun NavBackStack<NavKey>.popToRoot() {
+    while (size > 1) removeLastOrNull()
+}
 
 @Composable
 fun AuthenticatedApp(
@@ -172,8 +181,8 @@ fun AuthenticatedApp(
         initialPage = MainTab.Tieba.ordinal,
         pageCount = { MainTab.entries.size },
     )
-    val academicNavController = rememberNavController()
-    val rootNavController = rememberNavController()
+    val academicBackStack = rememberNavBackStack(AcademicHomeRoute)
+    val rootBackStack = rememberNavBackStack(MainContentRoute)
 
     LaunchedEffect(resolvedOrder, arranging) {
         if (!arranging && featureOrder != resolvedOrder) {
@@ -191,15 +200,11 @@ fun AuthenticatedApp(
                 spring(dampingRatio = 0.9f, stiffness = 700f)
             },
         )
-        if (selectedTab != MainTab.Academic && academicNavController.currentDestination != null) {
-            academicNavController.popBackStack(AcademicHomeRoute, inclusive = false)
-        }
+        if (selectedTab != MainTab.Academic) academicBackStack.popToRoot()
     }
 
     LaunchedEffect(academicState.loggedIn) {
-        if (!academicState.loggedIn && academicNavController.currentDestination != null) {
-            academicNavController.popBackStack(AcademicHomeRoute, inclusive = false)
-        }
+        if (!academicState.loggedIn) academicBackStack.popToRoot()
     }
 
     fun openFeature(feature: AcademicFeature) {
@@ -209,41 +214,18 @@ fun AuthenticatedApp(
         }
         arranging = false
         selectedTab = MainTab.Academic
-        academicNavController.navigate(academicFeatureRoute(feature)) {
-            launchSingleTop = true
-        }
+        academicBackStack.navigateSingleTop(AcademicFeatureRoute(feature.id))
     }
 
-    NavHost(
-        navController = rootNavController,
-        startDestination = MainContentRoute,
+    NavDisplay(
+        backStack = rootBackStack,
+        onBack = { rootBackStack.removeLastOrNull() },
         modifier = Modifier.fillMaxSize(),
-        enterTransition = {
-            scaleIn(
-                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
-                initialScale = if (appearance.ui.reduceEffect) 1f else 0.9f,
-            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 220))
-        },
-        exitTransition = {
-            scaleOut(
-                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
-                targetScale = if (appearance.ui.reduceEffect) 1f else 1.1f,
-            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 220))
-        },
-        popEnterTransition = {
-            scaleIn(
-                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
-                initialScale = if (appearance.ui.reduceEffect) 1f else 1.1f,
-            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 220))
-        },
-        popExitTransition = {
-            scaleOut(
-                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
-                targetScale = if (appearance.ui.reduceEffect) 1f else 0.9f,
-            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 220))
-        },
-    ) {
-        composable(MainContentRoute) {
+        transitionSpec = { ccitForwardNavigationTransition(appearance.ui.reduceEffect) },
+        popTransitionSpec = { ccitBackwardNavigationTransition(appearance.ui.reduceEffect) },
+        predictivePopTransitionSpec = { ccitBackwardNavigationTransition(appearance.ui.reduceEffect) },
+        entryProvider = entryProvider {
+        entry<MainContentRoute> {
     Column(Modifier.fillMaxSize()) {
         HorizontalPager(
             state = pagerState,
@@ -273,7 +255,7 @@ fun AuthenticatedApp(
                 } else {
                     AcademicHomeScreen(
                         state = academicState,
-                        navController = academicNavController,
+                        backStack = academicBackStack,
                         featureOrder = featureOrder,
                         arranging = arranging,
                         onToggleArranging = { arranging = !arranging },
@@ -313,11 +295,11 @@ fun AuthenticatedApp(
                     academicState = academicState,
                     loggingOut = loggingOut,
                     checkingSession = checkingSession,
-                    onOpenSettings = { rootNavController.navigate(AppearanceSettingsRoute) },
-                    onTiebaLogin = { rootNavController.navigate(TiebaLoginRoute) },
+                    onOpenSettings = { rootBackStack.navigateSingleTop(AppearanceSettingsRoute) },
+                    onTiebaLogin = { rootBackStack.navigateSingleTop(TiebaLoginRoute) },
                     onWebVpnLogin = { selectedTab = MainTab.Academic },
                     onAcademicLogout = {
-                        academicNavController.popBackStack(AcademicHomeRoute, inclusive = false)
+                        academicBackStack.popToRoot()
                         clearCookiesForDomains(AcademicCookieDomains)
                         onAcademicLogout()
                     },
@@ -341,7 +323,7 @@ fun AuthenticatedApp(
         )
     }
         }
-        composable(AppearanceSettingsRoute) {
+        entry<AppearanceSettingsRoute> {
             AppearanceSettingsScreen(
                 current = appearance,
                 themeSettings = appearanceViewModel.themeSettings,
@@ -350,16 +332,17 @@ fun AuthenticatedApp(
                 currentRssFeeds = rssFeeds,
                 reduceEffect = appearance.ui.reduceEffect,
                 onThemedIconChange = appearanceViewModel::setThemedAppIcon,
-                onBack = rootNavController::navigateUp,
+                onBack = { rootBackStack.removeLastOrNull() },
             )
         }
-        composable(TiebaLoginRoute) {
+        entry<TiebaLoginRoute> {
             TiebaLoginScreen(
-                onBack = rootNavController::navigateUp,
-                onLoggedIn = rootNavController::navigateUp,
+                onBack = { rootBackStack.removeLastOrNull() },
+                onLoggedIn = { rootBackStack.removeLastOrNull() },
             )
         }
-    }
+        },
+    )
 }
 
 @Composable
@@ -449,7 +432,7 @@ internal fun MainNavigationBar(
 @Composable
 private fun AcademicHomeScreen(
     state: AcademicUiState,
-    navController: NavHostController,
+    backStack: NavBackStack<NavKey>,
     featureOrder: List<AcademicFeature>,
     arranging: Boolean,
     onToggleArranging: () -> Unit,
@@ -499,36 +482,15 @@ private fun AcademicHomeScreen(
                 )
             }
         }
-        else -> NavHost(
-            navController = navController,
-            startDestination = AcademicHomeRoute,
+        else -> NavDisplay(
+            backStack = backStack,
+            onBack = { backStack.removeLastOrNull() },
             modifier = Modifier.fillMaxSize(),
-            enterTransition = {
-                scaleIn(
-                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                    initialScale = if (reduceMotion) 1f else 0.9f,
-                ) + fadeIn(tween(if (reduceMotion) 120 else 220))
-            },
-            exitTransition = {
-                scaleOut(
-                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                    targetScale = if (reduceMotion) 1f else 1.1f,
-                ) + fadeOut(tween(if (reduceMotion) 120 else 220))
-            },
-            popEnterTransition = {
-                scaleIn(
-                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                    initialScale = if (reduceMotion) 1f else 1.1f,
-                ) + fadeIn(tween(if (reduceMotion) 120 else 220))
-            },
-            popExitTransition = {
-                scaleOut(
-                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                    targetScale = if (reduceMotion) 1f else 0.9f,
-                ) + fadeOut(tween(if (reduceMotion) 120 else 220))
-            },
-        ) {
-            composable(AcademicHomeRoute) {
+            transitionSpec = { ccitForwardNavigationTransition(reduceMotion) },
+            popTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+            predictivePopTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+            entryProvider = entryProvider {
+            entry<AcademicHomeRoute> {
                 FeatureListScreen(
                     title = "教务系统",
                     subtitle = "${featureOrder.size} 项学生服务",
@@ -540,15 +502,8 @@ private fun AcademicHomeScreen(
                     onOrderSettled = onOrderSettled,
                 )
             }
-            composable(
-                route = "$AcademicFeatureRoute/{$FeatureIdArgument}",
-                arguments = listOf(
-                    navArgument(FeatureIdArgument) { type = NavType.StringType },
-                ),
-            ) { backStackEntry ->
-                val feature = AcademicFeature.fromId(
-                    backStackEntry.arguments?.getString(FeatureIdArgument).orEmpty(),
-                ) ?: return@composable
+            entry<AcademicFeatureRoute> { route ->
+                val feature = AcademicFeature.fromId(route.featureId) ?: return@entry
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = CcitColors.Shell,
@@ -556,13 +511,13 @@ private fun AcademicHomeScreen(
                     when (feature) {
                         AcademicFeature.Grades -> FeaturePageHeader(
                             feature.title,
-                            navController::popBackStack,
+                            { backStack.removeLastOrNull() },
                         ) {
                             AcademicGradesScreen(state, onSelectTerm, onBestOnlyChanged, onQueryGrades)
                         }
                         AcademicFeature.Timetable -> FeaturePageHeader(
                             feature.title,
-                            navController::popBackStack,
+                            { backStack.removeLastOrNull() },
                         ) {
                             TimetableScreen(
                                 timetable = state.timetable,
@@ -572,7 +527,7 @@ private fun AcademicHomeScreen(
                         }
                         AcademicFeature.SelectionResults -> FeaturePageHeader(
                             feature.title,
-                            navController::popBackStack,
+                            { backStack.removeLastOrNull() },
                         ) {
                             CourseSelectionResultsScreen(
                                 state = state,
@@ -582,7 +537,7 @@ private fun AcademicHomeScreen(
                         }
                         AcademicFeature.Evaluation -> FeaturePageHeader(
                             feature.title,
-                            navController::popBackStack,
+                            { backStack.removeLastOrNull() },
                         ) {
                             StudentEvaluationScreen(
                                 state = state,
@@ -597,14 +552,15 @@ private fun AcademicHomeScreen(
                         }
                         else -> FeaturePageHeader(
                             feature.title,
-                            navController::popBackStack,
+                            { backStack.removeLastOrNull() },
                         ) {
                             AcademicWebPage(feature, state.webViewCookies)
                         }
                     }
                 }
             }
-        }
+            },
+        )
     }
 }
 

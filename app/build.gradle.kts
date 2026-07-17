@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.kapt)
 }
@@ -37,8 +38,8 @@ android {
         applicationId = "edu.ccit.webvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = ciVersionCode ?: 33
-        versionName = ciVersionName ?: "2.1.27"
+        versionCode = ciVersionCode ?: 34
+        versionName = ciVersionName ?: "2.1.28"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -117,10 +118,12 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.navigation3.runtime)
+    implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.core)
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
     kapt(libs.kotlin.metadata.jvm)

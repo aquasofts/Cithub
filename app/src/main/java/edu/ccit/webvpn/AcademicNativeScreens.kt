@@ -1,11 +1,5 @@
 package edu.ccit.webvpn
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,9 +34,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import edu.ccit.webvpn.core.academic.EvaluationAnswer
 import edu.ccit.webvpn.core.academic.EvaluationBatch
 import edu.ccit.webvpn.core.academic.EvaluationCourse
@@ -53,7 +48,10 @@ import edu.ccit.webvpn.core.ui.CcitSelectField
 import edu.ccit.webvpn.core.ui.CcitOutlinedButton
 import edu.ccit.webvpn.core.ui.CcitColors
 import edu.ccit.webvpn.core.ui.CcitPrimaryButton
+import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
+import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.core.ui.ccitTextFieldColors
+import kotlinx.serialization.Serializable
 
 @Composable
 fun CourseSelectionResultsScreen(
@@ -160,57 +158,38 @@ fun StudentEvaluationScreen(
     onSave: (List<EvaluationAnswer>, String, Boolean) -> Unit,
     reduceMotion: Boolean,
 ) {
-    val navController = rememberNavController()
+    val backStack = rememberNavBackStack(EvaluationBatchesRoute)
     LaunchedEffect(Unit) {
         if (state.evaluationBatches.isEmpty() && !state.loadingEvaluation) onLoadBatches()
     }
-    NavHost(
-        navController = navController,
-        startDestination = EvaluationBatchesRoute,
+    NavDisplay(
+        backStack = backStack,
+        onBack = {
+            when (backStack.lastOrNull()) {
+                EvaluationCoursesRoute -> onCloseBatch()
+                EvaluationFormRoute -> onCloseForm()
+            }
+            backStack.removeLastOrNull()
+        },
         modifier = Modifier.fillMaxSize(),
-        enterTransition = {
-            fadeIn(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
-                scaleIn(
-                    initialScale = if (reduceMotion) 1f else 0.9f,
-                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                )
-        },
-        exitTransition = {
-            fadeOut(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
-                scaleOut(
-                    targetScale = if (reduceMotion) 1f else 1.1f,
-                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                )
-        },
-        popEnterTransition = {
-            fadeIn(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
-                scaleIn(
-                    initialScale = if (reduceMotion) 1f else 1.1f,
-                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                )
-        },
-        popExitTransition = {
-            fadeOut(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
-                scaleOut(
-                    targetScale = if (reduceMotion) 1f else 0.9f,
-                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
-                )
-        },
-    ) {
-        composable(EvaluationBatchesRoute) {
+        transitionSpec = { ccitForwardNavigationTransition(reduceMotion) },
+        popTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+        predictivePopTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
+        entryProvider = entryProvider {
+        entry<EvaluationBatchesRoute> {
             EvaluationOverview(
                 state = state,
                 showingCourses = false,
                 onLoadBatches = onLoadBatches,
                 onOpenBatch = { path ->
                     onOpenBatch(path)
-                    navController.navigate(EvaluationCoursesRoute) { launchSingleTop = true }
+                    if (backStack.lastOrNull() != EvaluationCoursesRoute) backStack.add(EvaluationCoursesRoute)
                 },
                 onCloseBatch = onCloseBatch,
                 onOpenCourse = onOpenCourse,
             )
         }
-        composable(EvaluationCoursesRoute) {
+        entry<EvaluationCoursesRoute> {
             EvaluationOverview(
                 state = state,
                 showingCourses = true,
@@ -218,21 +197,21 @@ fun StudentEvaluationScreen(
                 onOpenBatch = onOpenBatch,
                 onCloseBatch = {
                     onCloseBatch()
-                    navController.popBackStack()
+                    backStack.removeLastOrNull()
                 },
                 onOpenCourse = { path ->
                     onOpenCourse(path)
-                    navController.navigate(EvaluationFormRoute) { launchSingleTop = true }
+                    if (backStack.lastOrNull() != EvaluationFormRoute) backStack.add(EvaluationFormRoute)
                 },
             )
         }
-        composable(EvaluationFormRoute) {
+        entry<EvaluationFormRoute> {
             var formWasLoaded by remember { mutableStateOf(false) }
             val form = state.evaluationForm
             LaunchedEffect(form, state.savingEvaluation) {
                 if (form != null) formWasLoaded = true
                 if (form == null && formWasLoaded && !state.savingEvaluation) {
-                    navController.popBackStack()
+                    backStack.removeLastOrNull()
                 }
             }
             if (form == null) {
@@ -245,7 +224,7 @@ fun StudentEvaluationScreen(
                     } else {
                         NativeEmpty("课程评价表加载失败，请返回课程列表后重试")
                         CcitOutlinedButton(
-                            onClick = { navController.popBackStack() },
+                            onClick = { backStack.removeLastOrNull() },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("返回课程列表")
@@ -258,13 +237,14 @@ fun StudentEvaluationScreen(
                     saving = state.savingEvaluation,
                     onBack = {
                         onCloseForm()
-                        navController.popBackStack()
+                        backStack.removeLastOrNull()
                     },
                     onSave = onSave,
                 )
             }
         }
-    }
+        },
+    )
 }
 
 @Composable
@@ -336,9 +316,14 @@ private fun EvaluationOverview(
     }
 }
 
-private const val EvaluationBatchesRoute = "evaluation_batches"
-private const val EvaluationCoursesRoute = "evaluation_courses"
-private const val EvaluationFormRoute = "evaluation_form"
+@Serializable
+private data object EvaluationBatchesRoute : NavKey
+
+@Serializable
+private data object EvaluationCoursesRoute : NavKey
+
+@Serializable
+private data object EvaluationFormRoute : NavKey
 
 @Composable
 private fun EvaluationBatchCard(batch: EvaluationBatch, onOpen: (String) -> Unit) {
