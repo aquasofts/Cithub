@@ -68,6 +68,22 @@ class TiebaWireTest {
     }
 
     @Test
+    fun `frs multipart accepts a configured forum name`() {
+        val multipart = requests.forum(
+            page = 1,
+            sortType = 0,
+            goodOnly = false,
+            loadType = 1,
+            credentials = null,
+            forumName = "Kotlin",
+        ) as MultipartBody
+
+        val message = FrsPageRequest.ADAPTER.decode(multipart.dataPart())
+        assertEquals("Kotlin", message.data_?.kw)
+        assertEquals("Kotlin", TiebaReadRequestFactory.encodedForumName("Kotlin"))
+    }
+
+    @Test
     fun `frs and official sign share the persisted TiebaLite client identity`() {
         val config = TiebaClientConfig(
             uuid = "shared-client-uuid",

@@ -46,6 +46,8 @@ import edu.ccit.webvpn.feature.tieba.ThreadPage
 import edu.ccit.webvpn.feature.tieba.data.AccountEntity
 import edu.ccit.webvpn.feature.tieba.data.TiebaClientConfig
 import edu.ccit.webvpn.feature.tieba.data.TiebaSettingsRepository
+import edu.ccit.webvpn.feature.tieba.forumDisplayName
+import edu.ccit.webvpn.feature.tieba.normalizeTiebaEmoticonId
 import edu.ccit.webvpn.feature.tieba.originalImageUrl
 import java.io.IOException
 import java.security.MessageDigest
@@ -111,7 +113,7 @@ internal data class SearchPost(
     val user: SearchUser? = null,
     @SerializedName("post_num") val replyCount: String = "",
     val media: List<SearchMedia>? = null,
-    @SerializedName("forum_id") val forumId: Long = TARGET_FORUM_ID,
+    @SerializedName("forum_id") val forumId: Long = 0,
     @SerializedName("forum_name") val forumName: String = "",
     @SerializedName("forum_info") val forumInfo: SearchForumInfo? = null,
 )
@@ -168,7 +170,10 @@ data class SignResponse(
     val signedDays: Int? = null,
 )
 
-internal fun mapOfficialSignResult(result: TiebaSignResultBean): SignResponse {
+internal fun mapOfficialSignResult(
+    result: TiebaSignResultBean,
+    forumName: String = TARGET_FORUM_NAME,
+): SignResponse {
     val code = result.errorCode?.toIntOrNull()
     val message = result.errorMsg.orEmpty()
     val userInfo = result.userInfo
@@ -187,7 +192,7 @@ internal fun mapOfficialSignResult(result: TiebaSignResultBean): SignResponse {
         )
         code == 1004 || message.contains("未关注") -> SignResponse(
             SignOutcome.FAILED,
-            "尚未关注长春工程学院吧",
+            "尚未关注${forumDisplayName(forumName)}",
         )
         code == 0 -> SignResponse(SignOutcome.FAILED, "贴吧签到提交失败：签到响应数据无效")
         else -> SignResponse(
@@ -200,9 +205,13 @@ internal fun mapOfficialSignResult(result: TiebaSignResultBean): SignResponse {
     }
 }
 
-internal fun mapOfficialSignFailure(code: Int, message: String): SignResponse = when {
+internal fun mapOfficialSignFailure(
+    code: Int,
+    message: String,
+    forumName: String = TARGET_FORUM_NAME,
+): SignResponse = when {
     code == 1101 || message.contains("已签") -> SignResponse(SignOutcome.ALREADY_SIGNED, "今日已经签到")
-    code == 1004 || message.contains("未关注") -> SignResponse(SignOutcome.FAILED, "尚未关注长春工程学院吧")
+    code == 1004 || message.contains("未关注") -> SignResponse(SignOutcome.FAILED, "尚未关注${forumDisplayName(forumName)}")
     else -> SignResponse(
         SignOutcome.FAILED,
         message.takeIf(String::isNotBlank)
@@ -270,29 +279,37 @@ class TiebaNetworkRepository internal constructor(
         sort: ForumSort,
         goodOnly: Boolean,
         account: AccountEntity? = null,
+        forumName: String = TARGET_FORUM_NAME,
     ): ForumPage = runRead {
+        val requestedForumName = canonicalForumName(forumName).ifBlank { TARGET_FORUM_NAME }
         val credentials = account?.toReadCredentials()
         val sortType = if (sort == ForumSort.BY_REPLY) 0 else 1
         val loadType = if (page <= 1) 1 else 2
         // TiebaLite sends the logged-in credentials only inside CommonRequest and the
         // multipart stoken field. Do not add client_user_token or silently retry FRS
         // anonymously: the page's anti.tbs is consumed directly by the sign endpoint.
-        val resolved = readForum(page, sortType, goodOnly, loadType, credentials)
+        val resolved = readForum(page, sortType, goodOnly, loadType, credentials, requestedForumName)
         resolved.requireSuccess("FRS")
-        mapForum(resolved, page).also { signDiagnostics.recordForumSnapshot(account, it.forum) }
+        mapForum(resolved, page, requestedForumName).also { signDiagnostics.recordForumSnapshot(account, it.forum) }
     }
 
-    suspend fun search(keyword: String, page: Int): ForumPage = runRead {
-        val encodedName = TiebaReadRequestFactory.encodedForumName()
+    suspend fun search(
+        keyword: String,
+        page: Int,
+        forumName: String = TARGET_FORUM_NAME,
+        forumId: Long = TARGET_FORUM_ID,
+    ): ForumPage = runRead {
+        val requestedForumName = canonicalForumName(forumName).ifBlank { TARGET_FORUM_NAME }
+        val encodedName = TiebaReadRequestFactory.encodedForumName(requestedForumName)
         val referer = "https://tieba.baidu.com/mo/q/hybrid-usergrow-search/searchGlobal" +
-            "?entryPage=frs&loadingSignal=1&forumName=$encodedName&forumId=$TARGET_FORUM_ID" +
+            "?entryPage=frs&loadingSignal=1&forumName=$encodedName&forumId=${forumId.coerceAtLeast(0)}" +
             "&customfullscreen=1&nonavigationbar=1&timestamp=${System.currentTimeMillis()}" +
             "&_client_version=$TIEBA_V12_VERSION&_client_type=2"
-        val response = supportApi.search(keyword.trim(), page, referer = referer)
+        val response = supportApi.search(keyword.trim(), page, forumName = requestedForumName, referer = referer)
         if (response.errorCode != 0) throw TiebaReadFailure.Service(IOException("Search API ${response.errorCode}"))
         val data = response.data ?: throw TiebaReadFailure.Data()
         val threads = data.posts.asSequence()
-            .filter { canonicalForumName(it.forumName.ifBlank { it.forumInfo?.name.orEmpty() }) == TARGET_FORUM_NAME }
+            .filter { canonicalForumName(it.forumName.ifBlank { it.forumInfo?.name.orEmpty() }) == requestedForumName }
             .mapNotNull { post ->
                 post.tid.takeIf(String::isNotBlank)?.let { id ->
                     ForumThread(
@@ -317,12 +334,20 @@ class TiebaNetworkRepository internal constructor(
                             }
                             .map(::normalizeTiebaUrl).distinctBy(::tiebaImageIdentity),
                         authorId = post.user?.id ?: 0,
-                        forumId = post.forumId.takeIf { it > 0 } ?: TARGET_FORUM_ID,
-                        forumName = post.forumName.ifBlank { post.forumInfo?.name.orEmpty() }.ifBlank { TARGET_FORUM_NAME },
+                        forumId = post.forumId.takeIf { it > 0 } ?: forumId.takeIf { it > 0 } ?: 0,
+                        forumName = post.forumName.ifBlank { post.forumInfo?.name.orEmpty() }.ifBlank { requestedForumName },
                     )
                 }
             }.distinctBy(ForumThread::id).toList()
-        ForumPage(ForumSummary(), threads, page, data.hasMore == 1)
+        ForumPage(
+            ForumSummary(
+                id = forumId.takeIf { it > 0 }?.toString().orEmpty(),
+                name = requestedForumName,
+            ),
+            threads,
+            page,
+            data.hasMore == 1,
+        )
     }
 
     suspend fun loadThread(
@@ -378,10 +403,12 @@ class TiebaNetworkRepository internal constructor(
         requireExpectedForum(data.forum?.id, data.forum?.name, forumId, forumName)
         val responsePage = data.page ?: throw TiebaReadFailure.Data()
         FloorReplyPage(
+            floor = mapPost(data.post ?: throw TiebaReadFailure.Data(), emptyMap()),
             replies = data.subpost_list.map { mapReply(it, emptyMap()) }
                 .distinctBy { it.id.ifBlank { "${it.authorName}:${it.time}:${it.content}" } },
             page = responsePage.current_page.takeIf { it > 0 } ?: page,
             totalPages = responsePage.total_page.coerceAtLeast(page),
+            totalReplies = responsePage.total_count.coerceAtLeast(data.subpost_list.size),
         )
     }
 
@@ -548,10 +575,14 @@ class TiebaNetworkRepository internal constructor(
         )
     }
 
-    suspend fun loadForumRule(account: AccountEntity? = null): ForumRule = runRead {
+    suspend fun loadForumRule(
+        account: AccountEntity? = null,
+        forumId: Long = TARGET_FORUM_ID,
+    ): ForumRule = runRead {
+        if (forumId <= 0) throw TiebaReadFailure.Data()
         val clientConfig = settings.clientConfig(account?.cookie?.cookieValue("BAIDUID"))
         val response = readApi.forumRule(
-            readRequests.forumRule(TARGET_FORUM_ID, account?.toReadCredentials(), clientConfig),
+            readRequests.forumRule(forumId, account?.toReadCredentials(), clientConfig),
         )
         val code = response.error?.error_code ?: 0
         if (code != 0) apiFailure("FORUM_RULE", code)
@@ -698,7 +729,7 @@ class TiebaNetworkRepository internal constructor(
                         "hasRank=${result.userInfo?.userSignRank != null}",
                 )
             }
-            mapOfficialSignResult(result)
+            mapOfficialSignResult(result, forumName)
         } catch (error: TiebaApiException) {
             Log.w("TiebaSign", "service failure code=${error.code}")
             signDiagnostics.recordStage(
@@ -735,7 +766,7 @@ class TiebaNetworkRepository internal constructor(
                         )
                     }
             } else {
-                mapOfficialSignFailure(error.code, error.message)
+                mapOfficialSignFailure(error.code, error.message, forumName)
             }
         } catch (error: Throwable) {
             signDiagnostics.recordStage(
@@ -843,11 +874,20 @@ class TiebaNetworkRepository internal constructor(
         goodOnly: Boolean,
         loadType: Int,
         credentials: TiebaReadCredentials?,
+        forumName: String,
     ): FrsPageResponse {
         val clientConfig = settings.clientConfig()
         return readApi.forum(
-            body = readRequests.forum(page, sortType, goodOnly, loadType, credentials, clientConfig),
-            forumName = TiebaReadRequestFactory.encodedForumName(),
+            body = readRequests.forum(
+                page = page,
+                sortType = sortType,
+                goodOnly = goodOnly,
+                loadType = loadType,
+                credentials = credentials,
+                clientConfig = clientConfig,
+                forumName = forumName,
+            ),
+            forumName = TiebaReadRequestFactory.encodedForumName(forumName),
         )
     }
 
@@ -914,15 +954,22 @@ class TiebaNetworkRepository internal constructor(
         return if (errorCode(authenticated) != 0) request(null) else authenticated
     }
 
-    private fun mapForum(response: FrsPageResponse, requestedPage: Int): ForumPage {
+    private fun mapForum(
+        response: FrsPageResponse,
+        requestedPage: Int,
+        requestedForumName: String,
+    ): ForumPage {
         val data = response.data_ ?: throw TiebaReadFailure.Data()
         val forum = data.forum ?: throw TiebaReadFailure.Data()
-        requireTargetForum(forum.id, forum.name)
+        requireRequestedForum(forum.id, forum.name, requestedForumName)
         val users = data.user_list.associateBy(User::id)
         val threads = data.thread_list.asSequence()
             .filter { it.ala_info == null && it.forumInfo != null }
-            .filter { canonicalForumName(it.forumInfo?.name.orEmpty()) == TARGET_FORUM_NAME && it.forumInfo?.id == TARGET_FORUM_ID }
-            .mapNotNull { mapForumThread(it, users) }
+            .filter {
+                canonicalForumName(it.forumInfo?.name.orEmpty()) == requestedForumName &&
+                    it.forumInfo?.id == forum.id
+            }
+            .mapNotNull { mapForumThread(it, users, forum.id, forum.name) }
             .distinctBy(ForumThread::id)
             .toList()
         val page = data.page ?: throw TiebaReadFailure.Data()
@@ -949,7 +996,12 @@ class TiebaNetworkRepository internal constructor(
         )
     }
 
-    private fun mapForumThread(source: ThreadInfo, users: Map<Long, User>): ForumThread? {
+    private fun mapForumThread(
+        source: ThreadInfo,
+        users: Map<Long, User>,
+        fallbackForumId: Long,
+        fallbackForumName: String,
+    ): ForumThread? {
         val id = source.threadId.takeIf { it > 0 } ?: source.id.takeIf { it > 0 } ?: return null
         val author = users[source.authorId] ?: source.author
         val richExcerpt = source.richAbstract.mapTiebaContent()
@@ -978,8 +1030,8 @@ class TiebaNetworkRepository internal constructor(
             imageUrls = images,
             videoUrl = source.videoInfo?.videoUrl?.takeIf(String::isNotBlank),
             authorId = author?.id ?: source.authorId,
-            forumId = source.forumInfo?.id ?: TARGET_FORUM_ID,
-            forumName = source.forumInfo?.name.orEmpty().ifBlank { TARGET_FORUM_NAME },
+            forumId = source.forumInfo?.id ?: fallbackForumId,
+            forumName = source.forumInfo?.name.orEmpty().ifBlank { fallbackForumName },
             richExcerpt = richExcerpt,
             authorIsManager = author?.is_manager == 1 || author?.is_bawu == 1,
         )
@@ -1170,8 +1222,8 @@ class TiebaNetworkRepository internal constructor(
         }
     }
 
-    private fun requireTargetForum(id: Long?, name: String?) {
-        if (id != TARGET_FORUM_ID || canonicalForumName(name.orEmpty()) != TARGET_FORUM_NAME) {
+    private fun requireRequestedForum(id: Long?, name: String?, expectedName: String) {
+        if (id == null || id <= 0 || canonicalForumName(name.orEmpty()) != canonicalForumName(expectedName)) {
             throw TiebaReadFailure.WrongForum()
         }
     }
@@ -1339,9 +1391,7 @@ private fun List<PbContent>.mapTiebaContent(): List<TiebaContent> = mapNotNull {
             url = normalizeTiebaUrl(item.link),
         )
         2 -> TiebaContent.Emoticon(
-            id = item.text.ifBlank { "image_emoticon1" }.let {
-                if (it == "image_emoticon") "image_emoticon1" else it
-            },
+            id = normalizeTiebaEmoticonId(item.text),
             name = item.c.ifBlank { "表情" },
         )
         3, 20 -> item.toTiebaImage()

@@ -83,8 +83,30 @@ class TiebaRuntime private constructor(context: Context) {
         signMutex.withLock {
             val preferences = settings.preferences.first()
             val current = accountDao.get()
-            if (!preferences.sign.enabled || current == null || !shouldAutoSign(preferences.sign.lastRunAt)) return
-            performSign(current, forum = null)
+            val homeForumName = normalizeForumName(preferences.homeForumName).ifBlank { TARGET_FORUM_NAME }
+            val lastSignWasForHomeForum = normalizeForumName(preferences.sign.lastForumName) == homeForumName
+            if (
+                !preferences.sign.enabled || current == null ||
+                (lastSignWasForHomeForum && !shouldAutoSign(preferences.sign.lastRunAt))
+            ) return
+
+            val forum = runCatching {
+                network.loadForum(
+                    page = 1,
+                    sort = preferences.reading.forumSort,
+                    goodOnly = false,
+                    account = current,
+                    forumName = homeForumName,
+                ).forum
+            }.getOrElse { error ->
+                finishAutomaticSignFailure(homeForumName, error.message ?: "主页贴吧加载失败")
+                return
+            }
+            if (!forum.isFollowed) {
+                finishAutomaticSignFailure(homeForumName, "请先关注${forumDisplayName(homeForumName)}，再进行签到")
+                return
+            }
+            performSign(current, forum, automatic = true)
         }
     }
 
@@ -94,9 +116,9 @@ class TiebaRuntime private constructor(context: Context) {
             return@withLock SignResponse(SignOutcome.FAILED, "请先登录贴吧账号")
         }
         if (!forum.isFollowed) {
-            return@withLock SignResponse(SignOutcome.FAILED, "请先关注长春工程学院吧，再进行签到")
+            return@withLock SignResponse(SignOutcome.FAILED, "请先关注${forumDisplayName(forum.name)}，再进行签到")
         }
-        performSign(current, forum)
+        performSign(current, forum, automatic = false)
     }
 
     suspend fun followForum(forum: ForumSummary): String = signMutex.withLock {
@@ -110,7 +132,7 @@ class TiebaRuntime private constructor(context: Context) {
         try {
             network.likeForum(
                 account = current,
-                forumId = forum.id.toLongOrNull() ?: TARGET_FORUM_ID,
+                forumId = forum.id.toLongOrNull()?.takeIf { it > 0 } ?: error("贴吧关注失败：吧信息无效"),
                 forumName = forum.name.ifBlank { TARGET_FORUM_NAME },
                 tbs = forum.tbs,
                 diagnosticAttempt = attemptId,
@@ -131,30 +153,41 @@ class TiebaRuntime private constructor(context: Context) {
 
     suspend fun clearSignDiagnostics() = signDiagnostics.clear()
 
-    private suspend fun performSign(current: AccountEntity, forum: ForumSummary?): SignResponse {
+    private suspend fun finishAutomaticSignFailure(forumName: String, message: String) {
+        val response = SignResponse(SignOutcome.FAILED, message)
+        settings.recordSign(response.outcome, response.message, forumName)
+        _signState.value = TiebaSignState.Finished(response.outcome, response.message)
+    }
+
+    private suspend fun performSign(
+        current: AccountEntity,
+        forum: ForumSummary,
+        automatic: Boolean,
+    ): SignResponse {
         _signState.value = TiebaSignState.Running
-        val effectiveForum = forum ?: ForumSummary(
-            id = TARGET_FORUM_ID.toString(),
-            name = TARGET_FORUM_NAME,
-            tbs = current.tbs,
-        )
+        val forumId = forum.id.toLongOrNull()?.takeIf { it > 0 } ?: run {
+            val response = SignResponse(SignOutcome.FAILED, "贴吧签到失败：吧信息无效")
+            settings.recordSign(response.outcome, response.message, forum.name)
+            _signState.value = TiebaSignState.Finished(response.outcome, response.message)
+            return response
+        }
         val attemptId = signDiagnostics.startAttempt(
-            source = if (forum == null) "automatic" else "manual_forum_button",
+            source = if (automatic) "automatic" else "manual_forum_button",
             account = current,
-            forum = effectiveForum,
+            forum = forum,
         )
         val response = runCatching {
             signDiagnostics.recordStage(attemptId, "tieba_lite_flow_started")
             executeTiebaLiteForumSign(
                 current = current,
-                forumTbs = forum?.tbs,
+                forumTbs = forum.tbs.takeUnless { automatic },
                 refreshOfficialAccount = { account -> network.refreshOfficialAccount(account) },
                 persistAccount = accountDao::replace,
                 submitSign = { account, tbs ->
                     network.sign(
                         account = account,
-                        forumId = effectiveForum.id.toLongOrNull() ?: TARGET_FORUM_ID,
-                        forumName = effectiveForum.name.ifBlank { TARGET_FORUM_NAME },
+                        forumId = forumId,
+                        forumName = forum.name.ifBlank { TARGET_FORUM_NAME },
                         tbs = tbs,
                         diagnosticAttempt = attemptId,
                     )
@@ -167,7 +200,7 @@ class TiebaRuntime private constructor(context: Context) {
             "attempt_finished",
             mapOf("outcome" to response.outcome.name, "message" to response.message),
         )
-        settings.recordSign(response.outcome, response.message)
+        settings.recordSign(response.outcome, response.message, forum.name)
         _signState.value = TiebaSignState.Finished(response.outcome, response.message)
         return response
     }

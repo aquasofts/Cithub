@@ -9,9 +9,11 @@ import androidx.datastore.preferences.preferencesDataStore
 import edu.ccit.webvpn.feature.tieba.FloorSort
 import edu.ccit.webvpn.feature.tieba.ForumSort
 import edu.ccit.webvpn.feature.tieba.SignOutcome
+import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaPreferences
 import edu.ccit.webvpn.feature.tieba.TiebaReadingPreferences
 import edu.ccit.webvpn.feature.tieba.TiebaSignSettings
+import edu.ccit.webvpn.feature.tieba.normalizeForumName
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -31,6 +33,10 @@ class TiebaSettingsRepository(private val context: Context) {
         }
         .map { values ->
             TiebaPreferences(
+                homeForumName = values[HomeForumNameKey]
+                    ?.let(::normalizeForumName)
+                    ?.takeIf(String::isNotBlank)
+                    ?: TARGET_FORUM_NAME,
                 reading = TiebaReadingPreferences(
                     forumSort = values[ForumSortKey].enumOr(ForumSort.BY_REPLY),
                     floorSort = values[FloorSortKey].enumOr(FloorSort.ASCENDING),
@@ -43,9 +49,19 @@ class TiebaSettingsRepository(private val context: Context) {
                     lastRunAt = values[LastSignAtKey],
                     lastOutcome = values[LastSignOutcomeKey]?.enumOrNull(),
                     lastMessage = values[LastSignMessageKey],
+                    lastForumName = values[LastSignForumNameKey]
+                        ?.let(::normalizeForumName)
+                        ?.takeIf(String::isNotBlank)
+                        ?: TARGET_FORUM_NAME,
                 ),
             )
         }
+
+    suspend fun setHomeForumName(value: String) {
+        val normalized = normalizeForumName(value)
+        require(normalized.isNotBlank()) { "吧名不能为空" }
+        store.edit { it[HomeForumNameKey] = normalized }
+    }
 
     suspend fun setForumSort(value: ForumSort) = store.edit { it[ForumSortKey] = value.name }
     suspend fun setFloorSort(value: FloorSort) = store.edit { it[FloorSortKey] = value.name }
@@ -54,11 +70,17 @@ class TiebaSettingsRepository(private val context: Context) {
     suspend fun setStickyFloorHeader(value: Boolean) = store.edit { it[StickyHeaderKey] = value }
     suspend fun setSignEnabled(value: Boolean) = store.edit { it[SignEnabledKey] = value }
 
-    suspend fun recordSign(outcome: SignOutcome, message: String, timestamp: Long = System.currentTimeMillis()) {
+    suspend fun recordSign(
+        outcome: SignOutcome,
+        message: String,
+        forumName: String,
+        timestamp: Long = System.currentTimeMillis(),
+    ) {
         store.edit {
             it[LastSignAtKey] = timestamp
             it[LastSignOutcomeKey] = outcome.name
             it[LastSignMessageKey] = message
+            it[LastSignForumNameKey] = normalizeForumName(forumName).ifBlank { TARGET_FORUM_NAME }
         }
     }
 
@@ -110,6 +132,7 @@ class TiebaSettingsRepository(private val context: Context) {
     }
 
     private companion object {
+        val HomeForumNameKey = stringPreferencesKey("home_forum_name")
         val ForumSortKey = stringPreferencesKey("forum_sort")
         val FloorSortKey = stringPreferencesKey("floor_sort")
         val OnlyOpKey = booleanPreferencesKey("only_original_poster")
@@ -119,6 +142,7 @@ class TiebaSettingsRepository(private val context: Context) {
         val LastSignAtKey = longPreferencesKey("last_sign_at")
         val LastSignOutcomeKey = stringPreferencesKey("last_sign_outcome")
         val LastSignMessageKey = stringPreferencesKey("last_sign_message")
+        val LastSignForumNameKey = stringPreferencesKey("last_sign_forum_name")
         val ClientUuidKey = stringPreferencesKey("client_uuid")
         val ClientIdKey = stringPreferencesKey("client_id")
         val ClientSampleIdKey = stringPreferencesKey("sample_id")

@@ -5,11 +5,23 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.25`
-- Version code: `31`
+- Version name: `2.1.27`
+- Version code: `33`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.27 (versionCode 33) — 2026-07-18
+
+- Removed the custom partial-screen Tieba slide transitions and delegated page animation and predictive back to Navigation Compose 2.9.8.
+- Enabled Navigation Compose's `launchSingleTop` option for native Tieba destinations so rapid repeated taps do not stack duplicate full-screen pages and animations.
+
+### 2.1.26 (versionCode 32) — 2026-07-18
+
+- Shortened app page transitions and added a fast, clipped horizontal transition for native Tieba detail pages.
+- Rebuilt nested-reply pages to match TiebaLite: the title identifies the source floor, the source floor is rendered as the parent body, and the complete reply count precedes the reply list.
+- Fixed dynamic client emoticons such as `#(突然兴奋)` by validating both Tieba emoticon ID families and using TiebaLite's HTTP asset endpoint through a domain-scoped cleartext exception.
+- Made the native Tieba home forum configurable and kept forum loading, search, follow, and automatic sign-in aligned with the selected forum.
 
 ### 2.1.25 (versionCode 31) — 2026-07-18
 

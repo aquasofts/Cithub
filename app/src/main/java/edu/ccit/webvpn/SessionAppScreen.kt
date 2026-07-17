@@ -220,27 +220,27 @@ fun AuthenticatedApp(
         modifier = Modifier.fillMaxSize(),
         enterTransition = {
             scaleIn(
-                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
                 initialScale = if (appearance.ui.reduceEffect) 1f else 0.9f,
-            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 300))
+            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 220))
         },
         exitTransition = {
             scaleOut(
-                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
                 targetScale = if (appearance.ui.reduceEffect) 1f else 1.1f,
-            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 300))
+            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 220))
         },
         popEnterTransition = {
             scaleIn(
-                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
                 initialScale = if (appearance.ui.reduceEffect) 1f else 1.1f,
-            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 300))
+            ) + fadeIn(tween(if (appearance.ui.reduceEffect) 120 else 220))
         },
         popExitTransition = {
             scaleOut(
-                tween(if (appearance.ui.reduceEffect) 120 else 300, easing = FastOutSlowInEasing),
+                tween(if (appearance.ui.reduceEffect) 120 else 220, easing = FastOutSlowInEasing),
                 targetScale = if (appearance.ui.reduceEffect) 1f else 0.9f,
-            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 300))
+            ) + fadeOut(tween(if (appearance.ui.reduceEffect) 120 else 220))
         },
     ) {
         composable(MainContentRoute) {
@@ -505,27 +505,27 @@ private fun AcademicHomeScreen(
             modifier = Modifier.fillMaxSize(),
             enterTransition = {
                 scaleIn(
-                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                     initialScale = if (reduceMotion) 1f else 0.9f,
-                ) + fadeIn(tween(if (reduceMotion) 120 else 300))
+                ) + fadeIn(tween(if (reduceMotion) 120 else 220))
             },
             exitTransition = {
                 scaleOut(
-                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                     targetScale = if (reduceMotion) 1f else 1.1f,
-                ) + fadeOut(tween(if (reduceMotion) 120 else 300))
+                ) + fadeOut(tween(if (reduceMotion) 120 else 220))
             },
             popEnterTransition = {
                 scaleIn(
-                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                     initialScale = if (reduceMotion) 1f else 1.1f,
-                ) + fadeIn(tween(if (reduceMotion) 120 else 300))
+                ) + fadeIn(tween(if (reduceMotion) 120 else 220))
             },
             popExitTransition = {
                 scaleOut(
-                    tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                     targetScale = if (reduceMotion) 1f else 0.9f,
-                ) + fadeOut(tween(if (reduceMotion) 120 else 300))
+                ) + fadeOut(tween(if (reduceMotion) 120 else 220))
             },
         ) {
             composable(AcademicHomeRoute) {

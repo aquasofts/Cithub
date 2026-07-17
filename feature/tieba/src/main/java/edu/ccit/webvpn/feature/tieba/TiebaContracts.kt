@@ -30,6 +30,7 @@ data class TiebaSignSettings(
     val lastRunAt: Long? = null,
     val lastOutcome: SignOutcome? = null,
     val lastMessage: String? = null,
+    val lastForumName: String = TARGET_FORUM_NAME,
 )
 
 sealed interface TiebaSignState {
@@ -40,6 +41,7 @@ sealed interface TiebaSignState {
 
 @Immutable
 data class TiebaPreferences(
+    val homeForumName: String = TARGET_FORUM_NAME,
     val reading: TiebaReadingPreferences = TiebaReadingPreferences(),
     val sign: TiebaSignSettings = TiebaSignSettings(),
 )
@@ -181,9 +183,11 @@ data class FloorReply(
 
 @Immutable
 data class FloorReplyPage(
+    val floor: ThreadFloor,
     val replies: List<FloorReply>,
     val page: Int,
     val totalPages: Int,
+    val totalReplies: Int,
 )
 
 @Immutable
@@ -289,13 +293,27 @@ sealed interface ForumRouteDecision {
 }
 
 fun forumRouteDecision(forumName: String): ForumRouteDecision {
-    val canonical = forumName.trim().removeSuffix("吧")
+    val canonical = normalizeForumName(forumName)
     return if (canonical == TARGET_FORUM_NAME) {
         ForumRouteDecision.Native
     } else {
         val encoded = URLEncoder.encode(canonical, StandardCharsets.UTF_8.name())
         ForumRouteDecision.External("https://tieba.baidu.com/f?kw=$encoded")
     }
+}
+
+fun normalizeForumName(value: String): String = value.trim().removeSuffix("吧").trim()
+
+fun forumDisplayName(value: String): String = normalizeForumName(value)
+    .takeIf(String::isNotBlank)
+    ?.let { "${it}吧" }
+    ?: TARGET_FORUM_DISPLAY_NAME
+
+private val tiebaEmoticonIdPattern = Regex("(?:image_emoticon|shoubai_emoji)\\d+")
+
+internal fun normalizeTiebaEmoticonId(value: String): String {
+    val normalized = value.trim().let { if (it == "image_emoticon") "image_emoticon1" else it }
+    return normalized.takeIf(tiebaEmoticonIdPattern::matches) ?: "image_emoticon1"
 }
 
 fun originalImageUrl(raw: String): String {

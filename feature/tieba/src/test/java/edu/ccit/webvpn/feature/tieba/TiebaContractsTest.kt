@@ -12,6 +12,13 @@ import org.junit.Test
 
 class TiebaContractsTest {
     @Test
+    fun forumNameInputAcceptsDisplaySuffixAndWhitespace() {
+        assertEquals("长春工程学院", normalizeForumName("  长春工程学院吧  "))
+        assertEquals("长春工程学院吧", forumDisplayName("长春工程学院"))
+        assertEquals(TARGET_FORUM_DISPLAY_NAME, forumDisplayName("吧"))
+    }
+
+    @Test
     fun onlyTargetForumUsesNativeRoute() {
         assertEquals(ForumRouteDecision.Native, forumRouteDecision("长春工程学院吧"))
         assertTrue(forumRouteDecision("其他吧") is ForumRouteDecision.External)
@@ -23,6 +30,14 @@ class TiebaContractsTest {
             "https://imgsa.baidu.com/forum/pic/item/a.jpg",
             originalImageUrl("http://imgsa.baidu.com/forum/pic/item/a.jpg?tbpicau=1"),
         )
+    }
+
+    @Test
+    fun emoticonIdsAcceptTiebaLiteDynamicFamiliesAndRejectUnexpectedPaths() {
+        assertEquals("image_emoticon130", normalizeTiebaEmoticonId("image_emoticon130"))
+        assertEquals("shoubai_emoji12", normalizeTiebaEmoticonId("shoubai_emoji12"))
+        assertEquals("image_emoticon1", normalizeTiebaEmoticonId("image_emoticon"))
+        assertEquals("image_emoticon1", normalizeTiebaEmoticonId("../../unexpected"))
     }
 
     @Test

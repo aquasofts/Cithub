@@ -91,7 +91,7 @@ fun AppearanceSettingsScreen(
     onBack: () -> Unit,
 ) {
     val navigator = rememberNavController()
-    val duration = if (reduceEffect) 120 else 300
+    val duration = if (reduceEffect) 120 else 220
     NavHost(
         navController = navigator,
         startDestination = SettingsHomeRoute,
@@ -201,7 +201,7 @@ private fun SettingsHomeScreen(
                 preference(
                     onClick = onTieba,
                     title = "贴吧设置",
-                    summary = "阅读偏好、自动签到与最近结果",
+                    summary = "主页贴吧、阅读偏好、自动签到与最近结果",
                     icon = Icons.Outlined.Forum,
                     trailingIcon = Icons.Outlined.Tune,
                 )

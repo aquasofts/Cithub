@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.annotations.SerializedName
 import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.data.AccountEntity
+import edu.ccit.webvpn.feature.tieba.forumDisplayName
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
@@ -96,7 +97,7 @@ internal class TiebaWebSignClient(
             )
             code == 1004 || code == 1011 || message.contains("未关注") || message.contains("未加入") -> SignResponse(
                 SignOutcome.FAILED,
-                "账号尚未关注长春工程学院吧或等级不足，请先关注该吧后再签到",
+                "账号尚未关注${forumDisplayName(forumName)}或等级不足，请先关注该吧后再签到",
             )
             else -> SignResponse(
                 SignOutcome.FAILED,

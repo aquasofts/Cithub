@@ -169,31 +169,31 @@ fun StudentEvaluationScreen(
         startDestination = EvaluationBatchesRoute,
         modifier = Modifier.fillMaxSize(),
         enterTransition = {
-            fadeIn(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+            fadeIn(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
                 scaleIn(
                     initialScale = if (reduceMotion) 1f else 0.9f,
-                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                 )
         },
         exitTransition = {
-            fadeOut(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+            fadeOut(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
                 scaleOut(
                     targetScale = if (reduceMotion) 1f else 1.1f,
-                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                 )
         },
         popEnterTransition = {
-            fadeIn(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+            fadeIn(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
                 scaleIn(
                     initialScale = if (reduceMotion) 1f else 1.1f,
-                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                 )
         },
         popExitTransition = {
-            fadeOut(tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing)) +
+            fadeOut(tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing)) +
                 scaleOut(
                     targetScale = if (reduceMotion) 1f else 0.9f,
-                    animationSpec = tween(if (reduceMotion) 120 else 300, easing = FastOutSlowInEasing),
+                    animationSpec = tween(if (reduceMotion) 120 else 220, easing = FastOutSlowInEasing),
                 )
         },
     ) {

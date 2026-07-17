@@ -80,6 +80,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -164,13 +165,15 @@ import edu.ccit.webvpn.feature.tieba.ForumSummary
 import edu.ccit.webvpn.feature.tieba.ForumThread
 import edu.ccit.webvpn.feature.tieba.LoadPicPageData
 import edu.ccit.webvpn.feature.tieba.SignOutcome
-import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_DISPLAY_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaAccount
 import edu.ccit.webvpn.feature.tieba.TiebaContent
 import edu.ccit.webvpn.feature.tieba.TiebaRuntime
 import edu.ccit.webvpn.feature.tieba.TiebaUserPost
 import edu.ccit.webvpn.feature.tieba.TiebaUserProfile
 import edu.ccit.webvpn.feature.tieba.ThreadFloor
+import edu.ccit.webvpn.feature.tieba.forumDisplayName
+import edu.ccit.webvpn.feature.tieba.normalizeForumName
+import edu.ccit.webvpn.feature.tieba.normalizeTiebaEmoticonId
 import edu.ccit.webvpn.feature.tieba.network.isAuthorizedTiebaImageUrl
 import edu.ccit.webvpn.feature.tieba.network.parseLoginCookies
 import java.text.DateFormat
@@ -214,6 +217,7 @@ private class ForumScreenState {
     var actionRunning by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var queryKey by mutableStateOf<String?>(null)
+    var attemptedQueryKey by mutableStateOf<String?>(null)
     val listState = LazyListState()
 }
 
@@ -261,6 +265,8 @@ private class ThreadScreenState(initialTitle: String) {
 private class FloorRepliesScreenState {
     var page by mutableIntStateOf(0)
     var totalPages by mutableIntStateOf(1)
+    var totalReplies by mutableIntStateOf(0)
+    var floor by mutableStateOf<ThreadFloor?>(null)
     var replies by mutableStateOf(emptyList<edu.ccit.webvpn.feature.tieba.FloorReply>())
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
@@ -297,15 +303,19 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     val profileStates = remember { mutableMapOf<Long, UserProfileScreenState>() }
     val forumRuleState = remember { ForumRuleScreenState() }
 
+    fun navigateSingleTop(route: String) {
+        navigator.navigate(route) { launchSingleTop = true }
+    }
+
     fun openThread(thread: ForumThread, focusPostId: Long = 0) {
-        navigator.navigate(
+        navigateSingleTop(
             "$ThreadRoute/${thread.id}?title=${Uri.encode(thread.title)}" +
                 "&forumId=${thread.forumId}&forumName=${Uri.encode(thread.forumName)}&postId=$focusPostId",
         )
     }
 
     fun openProfile(uid: Long) {
-        if (uid > 0) navigator.navigate("$ProfileRoute/$uid")
+        if (uid > 0) navigateSingleTop("$ProfileRoute/$uid")
     }
 
     fun openReply(target: ContentActionTarget) {
@@ -320,23 +330,38 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
         }
     }
 
-    NavHost(navigator, startDestination = ForumRoute, modifier = modifier.fillMaxSize()) {
+    NavHost(
+        navController = navigator,
+        startDestination = ForumRoute,
+        modifier = modifier.fillMaxSize(),
+    ) {
         composable(ForumRoute) {
             ForumScreen(
                 active = active,
                 runtime = runtime,
                 state = forumState,
-                onSearch = { navigator.navigate(SearchRoute) },
+                onSearch = { navigateSingleTop(SearchRoute) },
                 onThread = ::openThread,
                 onProfile = { openProfile(it.authorId) },
-                onRule = { navigator.navigate(ForumRuleRoute) },
+                onRule = { navigateSingleTop(ForumRuleRoute) },
             )
         }
         composable(ForumRuleRoute) {
-            ForumRuleScreen(runtime, forumRuleState, navigator::navigateUp)
+            ForumRuleScreen(
+                runtime = runtime,
+                state = forumRuleState,
+                forumId = forumState.forum.id.toLongOrNull() ?: 0,
+                onBack = navigator::navigateUp,
+            )
         }
         composable(SearchRoute) {
-            SearchScreen(runtime, searchState, navigator::navigateUp, ::openThread) { openProfile(it.authorId) }
+            SearchScreen(
+                runtime = runtime,
+                state = searchState,
+                currentForum = forumState.forum,
+                onBack = navigator::navigateUp,
+                onThread = ::openThread,
+            ) { openProfile(it.authorId) }
         }
         composable(
             "$ThreadRoute/{id}?title={title}&forumId={forumId}&forumName={forumName}&postId={postId}",
@@ -365,11 +390,13 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 onBack = navigator::navigateUp,
                 onImage = { data ->
                     photoViewData = data
-                    navigator.navigate(ImageRoute)
+                    navigateSingleTop(ImageRoute)
                 },
-                onReplies = { postId ->
-                    navigator.navigate(
-                        "$FloorRepliesRoute/${entry.arguments?.getString("id").orEmpty()}/$postId" +
+                onReplies = { floor ->
+                    val stateKey = "$threadId:${floor.postId}"
+                    floorRepliesStates.getOrPut(stateKey) { FloorRepliesScreenState() }.floor = floor
+                    navigateSingleTop(
+                        "$FloorRepliesRoute/${entry.arguments?.getString("id").orEmpty()}/${floor.postId}" +
                             "?forumId=$forumId&forumName=${Uri.encode(forumName)}",
                     )
                 },
@@ -396,7 +423,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 forumId = entry.arguments?.getLong("forumId") ?: edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID,
                 forumName = entry.arguments?.getString("forumName").orEmpty(),
                 onBack = navigator::navigateUp,
-                onImage = { data -> photoViewData = data; navigator.navigate(ImageRoute) },
+                onImage = { data -> photoViewData = data; navigateSingleTop(ImageRoute) },
                 onProfile = ::openProfile,
                 onReply = ::openReply,
             )
@@ -454,42 +481,70 @@ private fun ForumScreen(
     onRule: () -> Unit,
 ) {
     val preferences by runtime.settings.preferences.collectAsStateWithLifecycle(initialValue = edu.ccit.webvpn.feature.tieba.TiebaPreferences())
+    val homeForumName = normalizeForumName(preferences.homeForumName)
+        .ifBlank { edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME }
+    val loadedForumName = normalizeForumName(state.forum.name)
+    val visibleForumName = state.forum.name.takeIf { loadedForumName == homeForumName } ?: homeForumName
     val account by runtime.account.collectAsStateWithLifecycle()
     val signState by runtime.signState.collectAsStateWithLifecycle()
     val signedToday = state.forum.signed ||
-        (preferences.sign.lastOutcome != SignOutcome.FAILED && isToday(preferences.sign.lastRunAt))
+        (preferences.sign.lastOutcome != null &&
+            preferences.sign.lastOutcome != SignOutcome.FAILED &&
+            normalizeForumName(preferences.sign.lastForumName) == homeForumName &&
+            isToday(preferences.sign.lastRunAt))
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var sortMenu by remember { mutableStateOf(false) }
 
     fun load(targetPage: Int, append: Boolean, pullRefresh: Boolean = false) {
         if (state.loading || state.refreshing) return
+        val requestKey = state.queryKey ?: return
+        state.attemptedQueryKey = requestKey
         scope.launch {
             if (pullRefresh) state.refreshing = true else state.loading = true
-            state.error = null
+            if (state.queryKey == requestKey) state.error = null
             runCatching {
                 runtime.network.loadForum(
                     targetPage,
                     preferences.reading.forumSort,
                     state.goodOnly,
                     runtime.accountDao.get(),
+                    homeForumName,
                 )
             }.onSuccess { result ->
-                state.threads = if (append) (state.threads + result.threads).distinctBy(ForumThread::id) else result.threads
-                state.forum = result.forum
-                state.page = targetPage
-                state.hasMore = result.hasMore
-            }.onFailure { state.error = it.message ?: "加载失败" }
+                if (state.queryKey == requestKey) {
+                    state.threads = if (append) (state.threads + result.threads).distinctBy(ForumThread::id) else result.threads
+                    state.forum = result.forum
+                    state.page = targetPage
+                    state.hasMore = result.hasMore
+                }
+            }.onFailure {
+                if (state.queryKey == requestKey) state.error = it.message ?: "加载失败"
+            }
             if (pullRefresh) state.refreshing = false else state.loading = false
         }
     }
 
-    LaunchedEffect(active, state.goodOnly, preferences.reading.forumSort, state.refreshing) {
+    LaunchedEffect(
+        active,
+        homeForumName,
+        state.goodOnly,
+        preferences.reading.forumSort,
+        state.loading,
+        state.refreshing,
+    ) {
         if (!active) return@LaunchedEffect
-        val queryKey = "${state.goodOnly}:${preferences.reading.forumSort}"
-        if (state.queryKey != queryKey || state.threads.isEmpty()) {
-            if (state.queryKey != queryKey) state.listState.scrollToItem(0)
+        val queryKey = "$homeForumName:${state.goodOnly}:${preferences.reading.forumSort}"
+        if (state.queryKey != queryKey) {
+            state.listState.scrollToItem(0)
+            state.threads = emptyList()
+            state.forum = ForumSummary(name = homeForumName)
+            state.page = 1
+            state.hasMore = false
+            state.attemptedQueryKey = null
             state.queryKey = queryKey
+        }
+        if (!state.loading && !state.refreshing && state.attemptedQueryKey != queryKey) {
             load(1, false)
         }
     }
@@ -512,7 +567,7 @@ private fun ForumScreen(
             TopAppBar(
                 windowInsets = TiebaWindowInsets,
                 expandedHeight = 56.dp,
-                title = { Text(TARGET_FORUM_DISPLAY_NAME, maxLines = 1) },
+                title = { Text(forumDisplayName(visibleForumName), maxLines = 1) },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "吧内搜索") }
                     TextButton(
@@ -679,6 +734,7 @@ private fun CompactForumNoticeRow(
 private fun ForumRuleScreen(
     runtime: TiebaRuntime,
     state: ForumRuleScreenState,
+    forumId: Long,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -687,13 +743,17 @@ private fun ForumRuleScreen(
         scope.launch {
             state.loading = true
             state.error = null
-            runCatching { runtime.network.loadForumRule(runtime.accountDao.get()) }
+            runCatching { runtime.network.loadForumRule(runtime.accountDao.get(), forumId) }
                 .onSuccess { state.rule = it }
                 .onFailure { state.error = it.message ?: "吧规加载失败" }
             state.loading = false
         }
     }
-    LaunchedEffect(Unit) { if (state.rule == null) load() }
+    LaunchedEffect(forumId) {
+        state.rule = null
+        state.error = null
+        if (forumId > 0) load() else state.error = "吧信息尚未加载完成"
+    }
     Scaffold(
         contentWindowInsets = TiebaWindowInsets,
         topBar = {
@@ -814,10 +874,17 @@ private fun ThreadRow(
 private fun SearchScreen(
     runtime: TiebaRuntime,
     state: SearchScreenState,
+    currentForum: ForumSummary,
     onBack: () -> Unit,
     onThread: (ForumThread) -> Unit,
     onProfile: (ForumThread) -> Unit,
 ) {
+    val preferences by runtime.settings.preferences.collectAsStateWithLifecycle(initialValue = edu.ccit.webvpn.feature.tieba.TiebaPreferences())
+    val homeForumName = normalizeForumName(preferences.homeForumName)
+        .ifBlank { edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME }
+    val homeForumId = currentForum.id.toLongOrNull()
+        ?.takeIf { normalizeForumName(currentForum.name) == homeForumName }
+        ?: 0
     val scope = rememberCoroutineScope()
     fun search(targetPage: Int, append: Boolean) {
         val query = if (append) state.submittedKeyword else state.keyword.trim()
@@ -826,13 +893,22 @@ private fun SearchScreen(
         scope.launch {
             state.loading = true
             state.error = null
-            runCatching { runtime.network.search(query, targetPage) }
+            runCatching { runtime.network.search(query, targetPage, homeForumName, homeForumId) }
                 .onSuccess { loaded ->
                     state.result = if (append) loaded.copy(threads = (state.result.threads + loaded.threads).distinctBy(ForumThread::id)) else loaded
                     state.page = targetPage
                     if (!append) state.listState.scrollToItem(0)
                 }.onFailure { state.error = it.message ?: "搜索失败" }
             state.loading = false
+        }
+    }
+    LaunchedEffect(homeForumName) {
+        if (normalizeForumName(state.result.forum.name) != homeForumName) {
+            state.page = 1
+            state.submittedKeyword = ""
+            state.result = ForumPage(ForumSummary(name = homeForumName), emptyList(), 1, false)
+            state.error = null
+            state.listState.scrollToItem(0)
         }
     }
     val shouldLoadMore by remember {
@@ -857,7 +933,13 @@ private fun SearchScreen(
         ) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(state.keyword, { state.keyword = it }, label = { Text("搜索 $TARGET_FORUM_DISPLAY_NAME") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        state.keyword,
+                        { state.keyword = it },
+                        label = { Text("搜索 ${forumDisplayName(homeForumName)}") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
                     IconButton(onClick = { search(1, false) }) { Icon(Icons.Default.Search, "搜索") }
                 }
             }
@@ -879,7 +961,7 @@ private fun ThreadScreen(
     focusPostId: String?,
     onBack: () -> Unit,
     onImage: (PhotoViewData) -> Unit,
-    onReplies: (String) -> Unit,
+    onReplies: (ThreadFloor) -> Unit,
     onProfile: (Long) -> Unit,
     onReply: (ContentActionTarget) -> Unit,
 ) {
@@ -978,7 +1060,7 @@ private fun ThreadScreen(
                                     seeLz = preferences.reading.onlyOriginalPoster,
                                     isOriginalPost = true,
                                     onImage = onImage,
-                                    onReplies = { onReplies(firstPost.postId) },
+                                    onReplies = { onReplies(firstPost) },
                                     onProfile = onProfile,
                                     onReply = onReply,
                                 )
@@ -1009,7 +1091,7 @@ private fun ThreadScreen(
                             forumName = forumName,
                             seeLz = preferences.reading.onlyOriginalPoster,
                             onImage = onImage,
-                            onReplies = { onReplies(floor.postId) },
+                            onReplies = { onReplies(floor) },
                             onProfile = onProfile,
                             onReply = onReply,
                         )
@@ -1191,6 +1273,8 @@ private fun FloorBody(
     forumName: String = "",
     seeLz: Boolean = false,
     isOriginalPost: Boolean = false,
+    showReplyPreview: Boolean = true,
+    showBottomDivider: Boolean = true,
     onImage: (PhotoViewData) -> Unit,
     onReplies: () -> Unit,
     onProfile: (Long) -> Unit,
@@ -1236,7 +1320,7 @@ private fun FloorBody(
             floor.videoUrls
                 .filterNot { url -> floor.richContent.filterIsInstance<TiebaContent.Video>().any { it.url == url } }
                 .forEach { VideoPlayer(it) }
-            if (floor.replyCount > 0 || floor.replies.isNotEmpty()) {
+            if (showReplyPreview && (floor.replyCount > 0 || floor.replies.isNotEmpty())) {
                 Surface(
                     onClick = onReplies,
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1284,7 +1368,7 @@ private fun FloorBody(
         }
     }
     }
-    if (!isOriginalPost) {
+    if (!isOriginalPost && showBottomDivider) {
         HorizontalDivider(Modifier.padding(start = 62.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
@@ -1305,6 +1389,9 @@ private fun FloorRepliesScreen(
 ) {
     var refreshKey by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    val preferences by runtime.settings.preferences.collectAsStateWithLifecycle(
+        initialValue = edu.ccit.webvpn.feature.tieba.TiebaPreferences(),
+    )
 
     fun loadPage(targetPage: Int, append: Boolean) {
         if (state.loading) return
@@ -1322,6 +1409,7 @@ private fun FloorRepliesScreen(
                 )
             }
                 .onSuccess { loaded ->
+                    state.floor = loaded.floor
                     state.replies = if (append) {
                         (state.replies + loaded.replies).distinctBy { it.id.ifBlank { "${it.authorId}:${it.time}:${it.content}" } }
                     } else {
@@ -1329,6 +1417,7 @@ private fun FloorRepliesScreen(
                     }
                     state.page = targetPage
                     state.totalPages = loaded.totalPages
+                    state.totalReplies = loaded.totalReplies
                 }
                 .onFailure { state.error = it.message ?: "帖子数据异常" }
             state.loading = false
@@ -1350,12 +1439,13 @@ private fun FloorRepliesScreen(
     LaunchedEffect(shouldLoadMore) {
         if (shouldLoadMore) loadPage(state.page + 1, true)
     }
+    val replyCount = maxOf(state.totalReplies, state.floor?.replyCount ?: 0, state.replies.size)
 
     Scaffold(
         contentWindowInsets = TiebaWindowInsets,
         topBar = {
-            TopAppBar(
-                title = { Text("楼中楼") },
+            CenterAlignedTopAppBar(
+                title = { Text(state.floor?.let { "${it.floor} 楼的回复" } ?: "楼中楼") },
                 navigationIcon = { BackButton(onBack) },
                 actions = { IconButton({ refreshKey++ }) { Icon(Icons.Default.Refresh, "刷新") } },
                 windowInsets = TiebaWindowInsets,
@@ -1365,9 +1455,35 @@ private fun FloorRepliesScreen(
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
             state = state.listState,
-            contentPadding = PaddingValues(vertical = 4.dp),
+            contentPadding = PaddingValues(bottom = 4.dp),
         ) {
             state.error?.let { item { ErrorCard(it) { refreshKey++ } } }
+            state.floor?.let { floor ->
+                item(key = "floor_parent", contentType = "floor_parent") {
+                    FloorBody(
+                        floor = floor,
+                        threadId = threadId,
+                        forumId = forumId,
+                        showBothNames = preferences.reading.showBothNames,
+                        forumName = forumName,
+                        seeLz = false,
+                        showReplyPreview = false,
+                        showBottomDivider = false,
+                        onImage = onImage,
+                        onReplies = {},
+                        onProfile = onProfile,
+                        onReply = onReply,
+                    )
+                    HorizontalDivider(thickness = 2.dp)
+                }
+                item(key = "floor_reply_header", contentType = "floor_reply_header") {
+                    Text(
+                        text = "$replyCount 条回复",
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
             items(
                 state.replies,
                 key = { it.id.ifBlank { "${it.authorName}:${it.time}:${it.content.hashCode()}" } },
@@ -1385,7 +1501,9 @@ private fun FloorRepliesScreen(
                 )
             }
             if (state.loading) item { LoadingRow() }
-            if (!state.loading && state.replies.isEmpty() && state.error == null) item { Text("暂无回复") }
+            if (!state.loading && state.replies.isEmpty() && state.error == null) {
+                item { Text("暂无更多回复", Modifier.padding(16.dp), color = CcitColors.InkMuted) }
+            }
         }
     }
 }
@@ -1590,7 +1708,7 @@ private fun RichTiebaText(
                 placeholder = Placeholder(21.sp, 21.sp, PlaceholderVerticalAlign.TextCenter),
             ) {
                 TiebaAsyncImage(
-                    url = emoticonModel(emoticon.id),
+                    url = tiebaEmoticonModel(emoticon.id),
                     contentDescription = emoticon.name,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit,
@@ -1656,10 +1774,14 @@ private fun TiebaAsyncImage(
 
 private val bundledEmoticons = ((1..50) + (77..84) + 89).mapTo(hashSetOf()) { "image_emoticon$it" }
 
-private fun emoticonModel(id: String): String = if (id in bundledEmoticons) {
-    "file:///android_asset/emoticon/$id.webp"
-} else {
-    "https://static.tieba.baidu.com/tb/editor/images/client/$id.png"
+internal fun tiebaEmoticonModel(id: String): String = normalizeTiebaEmoticonId(id).let { normalizedId ->
+    if (normalizedId in bundledEmoticons) {
+        "file:///android_asset/emoticon/$normalizedId.webp"
+    } else {
+        // TiebaLite deliberately uses HTTP for dynamic client emoticons. Baidu's HTTPS
+        // endpoint presents an incomplete certificate chain on some Android devices.
+        "http://static.tieba.baidu.com/tb/editor/images/client/$normalizedId.png"
+    }
 }
 
 @Composable
@@ -2290,6 +2412,9 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
     val account by runtime.account.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var editingHomeForum by rememberSaveable { mutableStateOf(false) }
+    var homeForumDraft by rememberSaveable { mutableStateOf("") }
+    var homeForumError by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun enableWhenReady() {
         if (account == null) {
@@ -2308,6 +2433,20 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
+            item { SectionTitle("主页") }
+            item {
+                ListItem(
+                    modifier = Modifier.clickable {
+                        homeForumDraft = preferences.homeForumName
+                        homeForumError = null
+                        editingHomeForum = true
+                    },
+                    headlineContent = { Text("主页贴吧") },
+                    supportingContent = { Text("当前加载：${forumDisplayName(preferences.homeForumName)}") },
+                    leadingContent = { Icon(Icons.Default.School, null) },
+                )
+            }
+            item { HorizontalDivider() }
             item { SectionTitle("阅读") }
             item {
                 ChoiceItem("吧内默认排序", listOf("按最后回复" to ForumSort.BY_REPLY, "按发布时间" to ForumSort.BY_SEND), preferences.reading.forumSort) {
@@ -2341,6 +2480,9 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
                     headlineContent = { Text("最近一次签到") },
                     supportingContent = {
                         Column {
+                            if (preferences.sign.lastRunAt != null) {
+                                Text("贴吧：${forumDisplayName(preferences.sign.lastForumName)}")
+                            }
                             Text(preferences.sign.lastRunAt?.let { DateFormat.getDateTimeInstance().format(Date(it)) } ?: "尚未执行")
                             preferences.sign.lastMessage?.let { Text(it) }
                         }
@@ -2374,6 +2516,46 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (editingHomeForum) {
+        AlertDialog(
+            onDismissRequest = { editingHomeForum = false },
+            title = { Text("更改主页贴吧") },
+            text = {
+                OutlinedTextField(
+                    value = homeForumDraft,
+                    onValueChange = {
+                        homeForumDraft = it
+                        homeForumError = null
+                    },
+                    label = { Text("吧名") },
+                    supportingText = { Text(homeForumError ?: "可输入“长春工程学院”或“长春工程学院吧”") },
+                    isError = homeForumError != null,
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val normalized = normalizeForumName(homeForumDraft)
+                        if (normalized.isBlank()) {
+                            homeForumError = "吧名不能为空"
+                        } else {
+                            scope.launch {
+                                runCatching { runtime.settings.setHomeForumName(normalized) }
+                                    .onSuccess {
+                                        editingHomeForum = false
+                                        snackbar.showSnackbar("主页贴吧已改为${forumDisplayName(normalized)}")
+                                    }
+                                    .onFailure { homeForumError = it.message ?: "保存失败" }
+                            }
+                        }
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { editingHomeForum = false }) { Text("取消") } },
+        )
     }
 }
 
@@ -2651,7 +2833,7 @@ private fun ReplyScreen(
                         ) {
                             gridItems((1..50).toList(), key = { it }) { id ->
                                 TiebaAsyncImage(
-                                    url = emoticonModel("image_emoticon$id"),
+                                    url = tiebaEmoticonModel("image_emoticon$id"),
                                     contentDescription = "表情 $id",
                                     modifier = Modifier.size(44.dp).clickable {
                                         text += "#(image_emoticon$id)"

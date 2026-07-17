@@ -237,6 +237,7 @@ internal class TiebaReadRequestFactory(
         loadType: Int,
         credentials: TiebaReadCredentials?,
         clientConfig: TiebaClientConfig? = null,
+        forumName: String = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME,
     ): RequestBody = protobufBody(
         FrsPageRequest(
             FrsPageRequestData(
@@ -252,7 +253,7 @@ internal class TiebaReadRequestFactory(
                 is_default_navtab = 0,
                 is_good = if (goodOnly) 1 else 0,
                 is_selection = 0,
-                kw = encodedForumName(),
+                kw = encodedForumName(forumName),
                 last_click_tid = 0,
                 load_type = loadType,
                 net_error = 0,
@@ -519,8 +520,10 @@ internal class TiebaReadRequestFactory(
         .build()
 
     companion object {
-        fun encodedForumName(): String = URLEncoder.encode(
-            edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME,
+        fun encodedForumName(
+            forumName: String = edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME,
+        ): String = URLEncoder.encode(
+            forumName,
             StandardCharsets.UTF_8.name(),
         )
     }

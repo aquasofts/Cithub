@@ -149,11 +149,34 @@ class TiebaNetworkTest {
     }
 
     @Test
+    fun repositoryLoadsTheConfiguredHomeForum() = runBlocking {
+        val forumId = 12345L
+        val forumName = "Kotlin"
+        val readApi = FakeTiebaReadApi(successForum(forumId, forumName), successThread())
+
+        val page = repository(readApi).loadForum(
+            page = 1,
+            sort = ForumSort.BY_REPLY,
+            goodOnly = false,
+            forumName = "  ${forumName}吧  ",
+        )
+
+        assertEquals(forumId.toString(), page.forum.id)
+        assertEquals(forumName, page.forum.name)
+        assertEquals(forumId, page.threads.single().forumId)
+        assertEquals(forumName, page.threads.single().forumName)
+        assertEquals(TiebaReadRequestFactory.encodedForumName(forumName), readApi.lastForumName)
+    }
+
+    @Test
     fun floorRepliesKeepAuthorAndRichContent() = runBlocking {
         val repository = repository(FakeTiebaReadApi(successForum(), successThread(), successFloor()))
 
         val page = repository.loadFloorReplies("9", "10", 1)
 
+        assertEquals(6, page.floor.floor)
+        assertEquals("原楼正文", page.floor.content)
+        assertEquals(1, page.totalReplies)
         assertEquals("回复者", page.replies.single().authorNickname)
         assertEquals("#(泪)", page.replies.single().content)
         assertEquals("image_emoticon9", page.replies.single().richContent.filterIsInstance<TiebaContent.Emoticon>().single().id)
@@ -1127,13 +1150,16 @@ class TiebaNetworkTest {
         )
     }
 
-    private fun successForum() = FrsPageResponse(
+    private fun successForum(
+        forumId: Long = TARGET_FORUM_ID,
+        forumName: String = TARGET_FORUM_NAME,
+    ) = FrsPageResponse(
         error = Error(error_code = 0),
         data_ = FrsPageResponseData(
             anti = Anti(tbs = "fresh-forum-tbs"),
             forum = ForumInfo(
-                id = TARGET_FORUM_ID,
-                name = TARGET_FORUM_NAME,
+                id = forumId,
+                name = forumName,
                 member_num = 10,
                 sign_in_info = SignInfo(user_info = SignUser(is_sign_in = 1, cont_sign_num = 6)),
             ),
@@ -1145,7 +1171,7 @@ class TiebaNetworkTest {
                     authorId = 4,
                     _abstract = listOf(ThreadAbstract(type = 0, text = "摘要")),
                     richAbstract = listOf(PbContent(type = 2, text = "image_emoticon9", c = "泪")),
-                    forumInfo = SimpleForum(id = TARGET_FORUM_ID, name = TARGET_FORUM_NAME),
+                    forumInfo = SimpleForum(id = forumId, name = forumName),
                 ),
             ),
             user_list = listOf(User(id = 4, name = "user", nameShow = "昵称", is_manager = 1)),
@@ -1227,7 +1253,15 @@ class TiebaNetworkTest {
         error = Error(error_code = 0),
         data_ = PbFloorResponseData(
             forum = SimpleForum(id = TARGET_FORUM_ID, name = TARGET_FORUM_NAME),
-            page = Page(current_page = 1, total_page = 1),
+            page = Page(current_page = 1, total_page = 1, total_count = 1),
+            post = Post(
+                id = 10,
+                floor = 6,
+                time = 1_700_000_000,
+                author = User(id = 4, name = "user", nameShow = "原楼作者"),
+                content = listOf(PbContent(type = 0, text = "原楼正文")),
+                sub_post_number = 1,
+            ),
             subpost_list = listOf(
                 SubPostList(
                     id = 11,
@@ -1258,7 +1292,12 @@ private class FakeTiebaReadApi(
     private val threadResponse: PbPageResponse,
     private val floorResponse: PbFloorResponse = PbFloorResponse(error = Error(error_code = 0)),
 ) : TiebaReadApi {
-    override suspend fun forum(body: RequestBody, forumName: String): FrsPageResponse = forumResponse
+    var lastForumName: String = ""
+
+    override suspend fun forum(body: RequestBody, forumName: String): FrsPageResponse {
+        lastForumName = forumName
+        return forumResponse
+    }
     override suspend fun thread(body: RequestBody, userToken: String?): PbPageResponse = threadResponse
     override suspend fun floor(body: RequestBody, userToken: String?): PbFloorResponse = floorResponse
     override suspend fun profile(body: RequestBody, userToken: String?): ProfileResponse = ProfileResponse(error = Error(error_code = 0))
