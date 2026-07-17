@@ -29,8 +29,10 @@ import com.huanchengfly.tieba.post.api.models.protos.profile.ProfileResponse
 import com.huanchengfly.tieba.post.api.models.protos.userPost.UserPostResponse
 import com.huanchengfly.tieba.post.api.models.protos.addPost.AddPostResponse
 import edu.ccit.webvpn.feature.tieba.FloorSort
+import edu.ccit.webvpn.feature.tieba.ForumSummary
 import edu.ccit.webvpn.feature.tieba.ForumSort
 import edu.ccit.webvpn.feature.tieba.LoadPicPageData
+import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaContent
@@ -40,11 +42,14 @@ import edu.ccit.webvpn.feature.tieba.data.TiebaSettingsRepository
 import java.net.URLDecoder
 import java.util.Locale
 import kotlinx.coroutines.runBlocking
+import okhttp3.FormBody
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -367,6 +372,75 @@ class TiebaNetworkTest {
     }
 
     @Test
+    fun forumFollowRequestMatchesTiebaLiteMiniClient() = runBlocking {
+        Settings.Secure.putString(context.contentResolver, Settings.Secure.ANDROID_ID, "fixed-android-id")
+        val account = AccountEntity(
+            uid = 7,
+            name = "user",
+            nickname = "nickname",
+            bduss = "bduss",
+            tbs = "old-tbs",
+            portrait = "",
+            sToken = "stoken",
+            cookie = "BDUSS=bduss; STOKEN=stoken; BAIDUID=baidu=device",
+        )
+        val config = TiebaClientConfig(
+            uuid = "00000000-1111-2222-3333-444444444444",
+            clientId = "fixed-client-id",
+            sampleId = "fixed-sample-id",
+            baiduId = "baidu=device",
+            activeTimestamp = 1_600_000_000_000,
+            firstInstallTime = 1_500_000_000_000,
+            lastUpdateTime = 1_650_000_000_000,
+        )
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"error_code":0,"error":{"errno":"0"}}"""))
+        try {
+            val client = TiebaOfficialClient(
+                context = context,
+                gson = Gson(),
+                account = account,
+                config = config,
+                baseUrl = server.url("/").toString(),
+                clock = { 1_700_000_000_000 },
+                stNumber = { 250 },
+                stSizeFactor = { 2.0 },
+            )
+            client.likeForum(TARGET_FORUM_ID.toString(), TARGET_FORUM_NAME, "fresh-follows-tbs", "follow-attempt")
+            val request = server.takeRequest()
+            val rawBody = request.body.readUtf8()
+            val fields = parseFormForTest(rawBody)
+
+            assertEquals("/c/c/forum/like", request.path)
+            assertEquals("ka=open", request.getHeader("Cookie"))
+            assertEquals("no-cache", request.getHeader("Pragma"))
+            assertEquals("bdtb for Android 7.2.0.0", request.getHeader("User-Agent"))
+            assertNull(request.getHeader("c3_aid"))
+            assertNull(request.getHeader("cuid_gid"))
+            assertNull(request.getHeader(SIGN_DIAGNOSTIC_ATTEMPT_HEADER))
+            assertEquals(TIEBA_LITE_MINI_VERSION, fields["_client_version"])
+            assertEquals(TIEBA_LITE_MINI_SOURCE, fields["from"])
+            assertEquals("mini", fields["subapp_type"])
+            assertEquals(TARGET_FORUM_ID.toString(), fields["fid"])
+            assertEquals(TARGET_FORUM_NAME, fields["kw"])
+            assertEquals("fresh-follows-tbs", fields["tbs"])
+            assertNull(fields["active_timestamp"])
+            assertNull(fields["android_id"])
+            assertNull(fields["sample_id"])
+            assertNull(fields["oaid"])
+            assertEquals(
+                md5ForTest(
+                    fields.filterKeys { it != "sign" }.entries
+                        .map { "${it.key}=${it.value}" }.sorted().joinToString("") + "tiebaclient!!!",
+                ),
+                fields["sign"],
+            )
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun officialLoginHydrationMatchesTiebaLiteV11InterceptorOutput() = runBlocking {
         Settings.Secure.putString(context.contentResolver, Settings.Secure.ANDROID_ID, "fixed-android-id")
         val account = AccountEntity(
@@ -637,6 +711,182 @@ class TiebaNetworkTest {
     }
 
     @Test
+    fun mobile300004FallsBackToHttpsWebSign() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"error_code":300004,"error_msg":"数据加载失败"}"""))
+        val account = AccountEntity(
+            uid = 7,
+            name = "user",
+            nickname = "nickname",
+            bduss = "bduss",
+            tbs = "stored-tbs",
+            portrait = "",
+            sToken = "stoken",
+            cookie = "BDUSS=bduss; STOKEN=stoken",
+        )
+        var fallbackCalls = 0
+        try {
+            val response = repository(
+                readApi = FakeTiebaReadApi(successForum(), successThread()),
+                officialClientFactory = { current, config ->
+                    TiebaOfficialClient(
+                        context,
+                        Gson(),
+                        current,
+                        config,
+                        server.url("/").toString(),
+                        clock = { 1_700_000_000_000 },
+                        stNumber = { 100 },
+                        stSizeFactor = { 1.0 },
+                    )
+                },
+                webSignFallback = { fallbackAccount, forumName, tbs, attemptId ->
+                    fallbackCalls++
+                    assertEquals(account, fallbackAccount)
+                    assertEquals(TARGET_FORUM_NAME, forumName)
+                    assertEquals("fresh-forum-tbs", tbs)
+                    assertEquals("attempt-300004", attemptId)
+                    SignResponse(SignOutcome.SUCCESS, "签到成功", 12)
+                },
+            ).sign(
+                account = account,
+                forumId = TARGET_FORUM_ID,
+                forumName = TARGET_FORUM_NAME,
+                tbs = "fresh-forum-tbs",
+                diagnosticAttempt = "attempt-300004",
+            )
+
+            assertEquals(SignOutcome.SUCCESS, response.outcome)
+            assertEquals(12, response.signedDays)
+            assertEquals(1, fallbackCalls)
+            assertEquals("/c/c/forum/sign", server.takeRequest().path)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun webSignFallbackUsesCookieAndDisplayedFrsTbs() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"no":0,"error":"success","data":{"uinfo":{"cont_sign_num":13,"user_sign_rank":2}}}""",
+            ),
+        )
+        val account = AccountEntity(
+            uid = 7,
+            name = "user",
+            nickname = "nickname",
+            bduss = "secret-bduss",
+            tbs = "stored-tbs",
+            portrait = "",
+            sToken = "secret-stoken",
+            cookie = "BDUSS=secret-bduss; STOKEN=secret-stoken; BAIDUID=device-id",
+        )
+        try {
+            val response = TiebaWebSignClient(
+                context = context,
+                gson = Gson(),
+                baseUrl = server.url("/").toString(),
+            ).sign(account, TARGET_FORUM_NAME, "displayed-frs-tbs", "web-attempt")
+            val request = server.takeRequest()
+            val fields = parseFormForTest(request.body.readUtf8())
+
+            assertEquals("/sign/add", request.path)
+            assertEquals(account.cookie, request.getHeader("Cookie"))
+            assertEquals("displayed-frs-tbs", fields["tbs"])
+            assertEquals(TARGET_FORUM_NAME, fields["kw"])
+            assertNull(request.getHeader(SIGN_DIAGNOSTIC_ATTEMPT_HEADER))
+            assertEquals(SignOutcome.SUCCESS, response.outcome)
+            assertEquals(13, response.signedDays)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun webSignStringDataReturnsServer1011InsteadOfCrashingGson() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"no":1011,"error":"您还未加入此吧或等级不够","data":""}""",
+            ),
+        )
+        val account = AccountEntity(
+            uid = 7,
+            name = "user",
+            nickname = "nickname",
+            bduss = "bduss",
+            tbs = "stored-tbs",
+            portrait = "",
+            sToken = "stoken",
+            cookie = "BDUSS=bduss; STOKEN=stoken",
+        )
+        try {
+            val response = TiebaWebSignClient(
+                context = context,
+                gson = Gson(),
+                baseUrl = server.url("/").toString(),
+            ).sign(account, TARGET_FORUM_NAME, "displayed-frs-tbs", "web-1011")
+
+            assertEquals(SignOutcome.FAILED, response.outcome)
+            assertTrue(response.message.contains("未关注"))
+            assertTrue(response.message.contains("等级不足"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun signDiagnosticsNeverPersistCredentialOrTbsPlaintext() = runBlocking {
+        val diagnostics = TiebaSignDiagnostics.get(context)
+        diagnostics.clear()
+        val account = AccountEntity(
+            uid = 987654,
+            name = "user",
+            nickname = "nickname",
+            bduss = "plain-bduss-must-not-leak",
+            tbs = "stored-tbs-must-not-leak",
+            portrait = "",
+            sToken = "plain-stoken-must-not-leak",
+            cookie = "BDUSS=plain-bduss-must-not-leak; STOKEN=plain-stoken-must-not-leak",
+        )
+        val attempt = diagnostics.startAttempt(
+            source = "test",
+            account = account,
+            forum = ForumSummary(
+                id = TARGET_FORUM_ID.toString(),
+                name = TARGET_FORUM_NAME,
+                tbs = "displayed-tbs-must-not-leak",
+            ),
+        )
+        val body = FormBody.Builder()
+            .add("BDUSS", account.bduss)
+            .add("tbs", "displayed-tbs-must-not-leak")
+            .add("sign", "plain-sign-must-not-leak")
+            .add("kw", TARGET_FORUM_NAME)
+            .build()
+        diagnostics.recordHttpRequest(
+            attempt,
+            "test",
+            Request.Builder()
+                .url("https://c.tieba.baidu.com/c/c/forum/sign")
+                .header("Cookie", account.cookie)
+                .post(body)
+                .build(),
+        )
+
+        val exported = diagnostics.exportText()
+        assertFalse(exported.contains("plain-bduss-must-not-leak"))
+        assertFalse(exported.contains("plain-stoken-must-not-leak"))
+        assertFalse(exported.contains("stored-tbs-must-not-leak"))
+        assertFalse(exported.contains("displayed-tbs-must-not-leak"))
+        assertFalse(exported.contains("plain-sign-must-not-leak"))
+        assertTrue(exported.contains("sha256:"))
+        diagnostics.clear()
+    }
+
+    @Test
     fun officialLoginRejectionIdentifiesTheFailedStageAndCode() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody("""{"error_code":300004,"error_msg":"数据加载失败"}"""))
@@ -853,6 +1103,7 @@ class TiebaNetworkTest {
         supportApi: TiebaSupportApi = FakeTiebaSupportApi(),
         picPageApi: TiebaPicPageApi = FakeTiebaPicPageApi(),
         officialClientFactory: ((AccountEntity?, TiebaClientConfig) -> TiebaOfficialClient)? = null,
+        webSignFallback: (suspend (AccountEntity, String, String, String?) -> SignResponse)? = null,
         settings: TiebaSettingsRepository = TiebaSettingsRepository(context),
     ): TiebaNetworkRepository {
         val identity = TiebaClientIdentity(context)
@@ -868,6 +1119,9 @@ class TiebaNetworkTest {
             settings = settings,
             officialClientFactory = officialClientFactory ?: { account, config ->
                 TiebaOfficialClient(context, Gson(), account, config)
+            },
+            webSignFallback = webSignFallback ?: { account, forumName, tbs, attemptId ->
+                TiebaWebSignClient(context, Gson()).sign(account, forumName, tbs, attemptId)
             },
             zidProvider = { "test-zid" },
         )

@@ -62,6 +62,8 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Image
@@ -209,6 +211,7 @@ private class ForumScreenState {
     var hasMore by mutableStateOf(false)
     var loading by mutableStateOf(false)
     var refreshing by mutableStateOf(false)
+    var actionRunning by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var queryKey by mutableStateOf<String?>(null)
     val listState = LazyListState()
@@ -516,9 +519,22 @@ private fun ForumScreen(
                         onClick = {
                             if (account == null) {
                                 scope.launch { snackbar.showSnackbar("请先在“我的”中登录贴吧账号") }
+                            } else if (!state.forum.isFollowed) {
+                                scope.launch {
+                                    state.actionRunning = true
+                                    try {
+                                        val message = runtime.followForum(state.forum)
+                                        state.forum = state.forum.copy(isFollowed = true)
+                                        snackbar.showSnackbar(message)
+                                    } catch (error: Throwable) {
+                                        snackbar.showSnackbar(error.message ?: "贴吧关注失败")
+                                    } finally {
+                                        state.actionRunning = false
+                                    }
+                                }
                             } else {
                                 scope.launch {
-                                    val result = runtime.signNow(state.forum.tbs)
+                                    val result = runtime.signNow(state.forum)
                                     if (result.outcome != SignOutcome.FAILED) {
                                         state.forum = state.forum.copy(
                                             signed = true,
@@ -529,16 +545,20 @@ private fun ForumScreen(
                                 }
                             }
                         },
-                        enabled = signState !is edu.ccit.webvpn.feature.tieba.TiebaSignState.Running && (account == null || !signedToday),
+                        enabled = !state.actionRunning &&
+                            signState !is edu.ccit.webvpn.feature.tieba.TiebaSignState.Running &&
+                            !state.loading && state.forum.id.isNotBlank() &&
+                            (account == null || !state.forum.isFollowed || !signedToday),
                     ) {
-                        if (signState is edu.ccit.webvpn.feature.tieba.TiebaSignState.Running) {
+                        if (state.actionRunning || signState is edu.ccit.webvpn.feature.tieba.TiebaSignState.Running) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
                             Text(
-                                if (signedToday) {
-                                    state.forum.signedDays.takeIf { it > 0 }?.let { "已签${it}天" } ?: "已签"
-                                } else {
-                                    "签到"
+                                when {
+                                    !state.forum.isFollowed -> "关注"
+                                    signedToday -> state.forum.signedDays.takeIf { it > 0 }
+                                        ?.let { "已签${it}天" } ?: "已签"
+                                    else -> "签到"
                                 },
                             )
                         }
@@ -2326,6 +2346,31 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
                         }
                     },
                     leadingContent = { Icon(if (outcome == SignOutcome.FAILED) Icons.Default.ErrorOutline else Icons.Default.Check, null) },
+                )
+            }
+            item {
+                ListItem(
+                    modifier = Modifier.clickable {
+                        scope.launch {
+                            context.copyText(runtime.exportSignDiagnostics())
+                            snackbar.showSnackbar("已复制脱敏后的签到诊断日志")
+                        }
+                    },
+                    headlineContent = { Text("复制签到诊断日志") },
+                    supportingContent = { Text("包含签到阶段、请求字段名、协议版本、指纹和服务端错误，不包含账号凭据明文") },
+                    leadingContent = { Icon(Icons.Default.BugReport, null) },
+                )
+            }
+            item {
+                ListItem(
+                    modifier = Modifier.clickable {
+                        scope.launch {
+                            runtime.clearSignDiagnostics()
+                            snackbar.showSnackbar("签到诊断日志已清空")
+                        }
+                    },
+                    headlineContent = { Text("清空签到诊断日志") },
+                    leadingContent = { Icon(Icons.Default.DeleteSweep, null) },
                 )
             }
         }

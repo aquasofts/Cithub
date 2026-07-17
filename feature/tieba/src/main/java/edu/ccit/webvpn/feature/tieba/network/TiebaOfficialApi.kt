@@ -84,9 +84,32 @@ internal interface TiebaOfficialApi {
         @Field("kw") forumName: String,
         @Field("tbs") tbs: String,
         @Header("client_user_token") clientUserToken: String,
+        @Header(SIGN_DIAGNOSTIC_ATTEMPT_HEADER) diagnosticAttempt: String? = null,
         @Field("_client_version") clientVersion: String = TIEBA_LITE_SIGN_VERSION,
         @Header("User-Agent") userAgent: String = "bdtb for Android $clientVersion",
     ): TiebaSignResultBean
+
+    @Headers(
+        "$FORCE_LOGIN_HEADER: true",
+        "Cookie: ka=open",
+        "Pragma: no-cache",
+        "$DROP_HEADERS_HEADER: Charset,client_type,c3_aid,cuid_gid",
+        "$DROP_PARAMS_HEADER: active_timestamp,android_id,baiduid,brand,cmode,cuid_gid,event_day,extra," +
+            "first_install_time,framework_ver,is_teenager,last_update_time,mac,sample_id,sdk_ver," +
+            "start_scheme,start_type,swan_game_ver,c3_aid,oaid",
+    )
+    @POST("c/c/forum/like")
+    @FormUrlEncoded
+    suspend fun likeForumFlow(
+        @Field("fid") forumId: String,
+        @Field("kw") forumName: String,
+        @Field("tbs") tbs: String,
+        @Header(SIGN_DIAGNOSTIC_ATTEMPT_HEADER) diagnosticAttempt: String? = null,
+        @Field("from") source: String = TIEBA_LITE_MINI_SOURCE,
+        @Field("subapp_type") subAppType: String = "mini",
+        @Field("_client_version") clientVersion: String = TIEBA_LITE_MINI_VERSION,
+        @Header("User-Agent") userAgent: String = "bdtb for Android $clientVersion",
+    ): TiebaCommonResponse
 
     @POST("c/s/sync")
     @FormUrlEncoded
@@ -203,6 +226,7 @@ internal class TiebaOfficialClient(
     private val clock: () -> Long = System::currentTimeMillis,
     stNumber: () -> Int = { ThreadLocalRandom.current().nextInt(100, 850) },
     stSizeFactor: () -> Double = { Math.random() * 8 + 0.4 },
+    private val diagnostics: TiebaSignDiagnostics = TiebaSignDiagnostics.get(context),
 ) {
     private val appContext = context.applicationContext
     private val identity = TiebaOfficialIdentity.create(appContext, config.uuid)
@@ -267,6 +291,7 @@ internal class TiebaOfficialClient(
             .addInterceptor(FailureResponseInterceptor(gson))
             .addInterceptor(ForceLoginInterceptor { account?.bduss?.isNotBlank() == true })
             .addInterceptor(SortAndSignInterceptor("tiebaclient!!!"))
+            .addInterceptor(TiebaSignDiagnosticsInterceptor(diagnostics, "tiebalite_mobile"))
             .build()
         api = Retrofit.Builder()
             .baseUrl(baseUrl)
@@ -277,9 +302,24 @@ internal class TiebaOfficialClient(
             .create(TiebaOfficialApi::class.java)
     }
 
-    suspend fun sign(forumId: String, forumName: String, tbs: String): TiebaSignResultBean {
+    suspend fun sign(
+        forumId: String,
+        forumName: String,
+        tbs: String,
+        diagnosticAttempt: String? = null,
+    ): TiebaSignResultBean {
         val current = requireNotNull(account) { "请先登录贴吧账号" }
-        return api.signFlow(forumId, forumName, tbs, current.uid.toString())
+        return api.signFlow(forumId, forumName, tbs, current.uid.toString(), diagnosticAttempt)
+    }
+
+    suspend fun likeForum(
+        forumId: String,
+        forumName: String,
+        tbs: String,
+        diagnosticAttempt: String? = null,
+    ) {
+        requireNotNull(account) { "请先登录贴吧账号" }
+        api.likeForumFlow(forumId, forumName, tbs, diagnosticAttempt)
     }
 
     /** Exact TiebaLite account hydration sequence used after WebView cookie login. */
@@ -535,6 +575,8 @@ private fun sha1Official(value: String): ByteArray = MessageDigest.getInstance("
     .digest(value.toByteArray(StandardCharsets.UTF_8))
 
 internal const val TIEBA_LITE_SIGN_VERSION = "11.10.8.6"
+internal const val TIEBA_LITE_MINI_VERSION = "7.2.0.0"
+internal const val TIEBA_LITE_MINI_SOURCE = "1021636m"
 private const val TIEBA_LITE_OFFICIAL_VERSION = "12.41.7.1"
 private const val FORCE_LOGIN_HEADER = "force_login"
 private const val DROP_HEADERS_HEADER = "drop_headers"

@@ -9,6 +9,7 @@
 -keep interface edu.ccit.webvpn.feature.tieba.network.TiebaReadApi { *; }
 -keep interface edu.ccit.webvpn.feature.tieba.network.TiebaPicPageApi { *; }
 -keep interface edu.ccit.webvpn.feature.tieba.network.TiebaOfficialApi { *; }
+-keep interface edu.ccit.webvpn.feature.tieba.network.TiebaWebSignApi { *; }
 
 # Gson constructs these official JSON response types reflectively. Keep the concrete classes and
 # their nested response objects intact; keeping fields alone does not prevent R8 class optimization.
@@ -21,6 +22,8 @@
 -keep class edu.ccit.webvpn.feature.tieba.network.TiebaSyncBean { *; }
 -keep class edu.ccit.webvpn.feature.tieba.network.TiebaSyncBean$* { *; }
 -keep class edu.ccit.webvpn.feature.tieba.network.TiebaCommonResponse { *; }
+-keep class edu.ccit.webvpn.feature.tieba.network.TiebaWebSignBean { *; }
+-keep class edu.ccit.webvpn.feature.tieba.network.TiebaWebSignBean$* { *; }
 
 # The Sofire handshake serializes its request and reflectively instantiates both encrypted-response
 # envelopes. R8 may otherwise merge the tiny private data classes and leave Gson with an abstract

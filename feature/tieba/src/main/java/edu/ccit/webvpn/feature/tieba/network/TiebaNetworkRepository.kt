@@ -233,9 +233,15 @@ class TiebaNetworkRepository internal constructor(
     private val picPageRequests: TiebaPicPageRequestFactory,
     private val gson: Gson,
     private val settings: TiebaSettingsRepository,
+    private val signDiagnostics: TiebaSignDiagnostics = TiebaSignDiagnostics.get(context),
     private val officialClientFactory: (AccountEntity?, TiebaClientConfig) -> TiebaOfficialClient = { account, config ->
         TiebaOfficialClient(context, gson, account, config)
     },
+    private val webSignFallback: suspend (AccountEntity, String, String, String?) -> SignResponse =
+        { account, forumName, tbs, attemptId ->
+            TiebaWebSignClient(context, gson, diagnostics = signDiagnostics)
+                .sign(account, forumName, tbs, attemptId)
+        },
     private val zidProvider: suspend (TiebaClientConfig) -> String = { config ->
         TiebaSofireClient(gson = gson).fetchZid(config.uuid)
     },
@@ -273,7 +279,7 @@ class TiebaNetworkRepository internal constructor(
         // anonymously: the page's anti.tbs is consumed directly by the sign endpoint.
         val resolved = readForum(page, sortType, goodOnly, loadType, credentials)
         resolved.requireSuccess("FRS")
-        mapForum(resolved, page)
+        mapForum(resolved, page).also { signDiagnostics.recordForumSnapshot(account, it.forum) }
     }
 
     suspend fun search(keyword: String, page: Int): ForumPage = runRead {
@@ -656,14 +662,29 @@ class TiebaNetworkRepository internal constructor(
     }
 
     /** Mirrors TiebaLite's OfficialTiebaApi.signFlow with the TBS supplied by its caller. */
-    suspend fun sign(account: AccountEntity, tbs: String): SignResponse {
+    suspend fun sign(account: AccountEntity, tbs: String): SignResponse = sign(
+        account = account,
+        forumId = TARGET_FORUM_ID,
+        forumName = TARGET_FORUM_NAME,
+        tbs = tbs,
+        diagnosticAttempt = null,
+    )
+
+    suspend fun sign(
+        account: AccountEntity,
+        forumId: Long,
+        forumName: String,
+        tbs: String,
+        diagnosticAttempt: String?,
+    ): SignResponse {
         if (tbs.isBlank()) return SignResponse(SignOutcome.FAILED, "贴吧认证 FRS 失败：签到凭据无效")
         val config = settings.clientConfig(account.cookie.cookieValue("BAIDUID"))
         return try {
             val result = officialClientFactory(account, config).sign(
-                TARGET_FORUM_ID.toString(),
-                TARGET_FORUM_NAME,
+                forumId.toString(),
+                forumName,
                 tbs,
+                diagnosticAttempt,
             )
             if (
                 result.errorCode?.toIntOrNull() == 0 &&
@@ -680,12 +701,89 @@ class TiebaNetworkRepository internal constructor(
             mapOfficialSignResult(result)
         } catch (error: TiebaApiException) {
             Log.w("TiebaSign", "service failure code=${error.code}")
-            mapOfficialSignFailure(error.code, error.message)
+            signDiagnostics.recordStage(
+                diagnosticAttempt,
+                "mobile_service_failure",
+                mapOf("service_code" to error.code, "service_message" to error.message),
+            )
+            if (error.code == 300004) {
+                signDiagnostics.recordStage(
+                    diagnosticAttempt,
+                    "web_fallback_started",
+                    mapOf("reason" to "mobile_300004"),
+                )
+                runCatching { webSignFallback(account, forumName, tbs, diagnosticAttempt) }
+                    .onSuccess { response ->
+                        signDiagnostics.recordStage(
+                            diagnosticAttempt,
+                            "web_fallback_finished",
+                            mapOf("outcome" to response.outcome.name, "message" to response.message),
+                        )
+                    }
+                    .getOrElse { fallbackError ->
+                        signDiagnostics.recordStage(
+                            diagnosticAttempt,
+                            "web_fallback_exception",
+                            mapOf(
+                                "exception" to fallbackError.javaClass.name,
+                                "message" to fallbackError.message,
+                            ),
+                        )
+                        SignResponse(
+                            SignOutcome.FAILED,
+                            "贴吧签到失败：移动接口错误 300004，网页备用接口${fallbackError.message?.let { "：$it" }.orEmpty()}",
+                        )
+                    }
+            } else {
+                mapOfficialSignFailure(error.code, error.message)
+            }
         } catch (error: Throwable) {
+            signDiagnostics.recordStage(
+                diagnosticAttempt,
+                "sign_exception",
+                mapOf("exception" to error.javaClass.name, "message" to error.message),
+            )
             SignResponse(
                 SignOutcome.FAILED,
                 signStageFailure("贴吧签到提交失败", error).message ?: "贴吧签到提交失败",
             )
+        }
+    }
+
+    /** Mirrors TiebaLite's MiniTiebaApi.likeForumFlow before sign-in is offered. */
+    suspend fun likeForum(
+        account: AccountEntity,
+        forumId: Long,
+        forumName: String,
+        tbs: String,
+        diagnosticAttempt: String?,
+    ) {
+        if (tbs.isBlank()) throw TiebaSignStageException("贴吧关注失败：FRS 凭据无效")
+        val config = settings.clientConfig(account.cookie.cookieValue("BAIDUID"))
+        try {
+            officialClientFactory(account, config).likeForum(
+                forumId = forumId.toString(),
+                forumName = forumName,
+                tbs = tbs,
+                diagnosticAttempt = diagnosticAttempt,
+            )
+        } catch (error: TiebaApiException) {
+            signDiagnostics.recordStage(
+                diagnosticAttempt,
+                "follow_service_failure",
+                mapOf("service_code" to error.code, "service_message" to error.message),
+            )
+            throw TiebaSignStageException(
+                "贴吧关注失败：${error.message.ifBlank { "服务端拒绝请求" }}（错误码 ${error.code}）",
+                error,
+            )
+        } catch (error: Throwable) {
+            signDiagnostics.recordStage(
+                diagnosticAttempt,
+                "follow_exception",
+                mapOf("exception" to error.javaClass.name, "message" to error.message),
+            )
+            throw signStageFailure("贴吧关注失败", error)
         }
     }
 

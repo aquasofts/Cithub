@@ -5,11 +5,23 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.23`
-- Version code: `29`
-- Updated: 2026-07-17
+- Version name: `2.1.25`
+- Version code: `31`
+- Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.25 (versionCode 31) — 2026-07-18
+
+- Matched TiebaLite's forum action flow: when FRS reports that the account has not joined the forum, the action now follows the forum through the signed Mini client request before sign-in is offered.
+- Made the HTTPS web sign fallback tolerate Baidu returning `data` as a string and preserve service error `1011` instead of replacing it with a Gson parsing exception.
+- Extended sign diagnostics and regression tests to cover the exact follow request fields, signature, and the real `1011` response captured from the device.
+
+### 2.1.24 (versionCode 30) — 2026-07-17
+
+- Fixed manual Tieba sign-in to submit the displayed FRS forum ID, forum name, and fresh `anti.tbs` through the TiebaLite-compatible mobile request.
+- Added an HTTPS web sign-in fallback for mobile service error `300004`, while keeping credentials off plaintext HTTP.
+- Added rotating, redacted sign-in diagnostics with copy and clear actions in Tieba settings for future failure analysis.
 
 ### 2.1.23 (versionCode 29) — 2026-07-17
 
