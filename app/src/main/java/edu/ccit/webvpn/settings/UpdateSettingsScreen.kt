@@ -73,7 +73,6 @@ internal fun UpdateSettingsScreen(
 ) {
     var current by remember(initial) { mutableStateOf(initial) }
     var editor by remember { mutableStateOf<AcceleratorEditor?>(null) }
-    var showConnectionsEditor by remember { mutableStateOf(false) }
     var customUrl by rememberSaveable { mutableStateOf("") }
     var customUrlError by rememberSaveable { mutableStateOf<String?>(null) }
     val checking by updateViewModel.manualChecking.collectAsStateWithLifecycle()
@@ -177,32 +176,6 @@ internal fun UpdateSettingsScreen(
             }
 
             item(key = "download-header") { SettingsSectionHeader("下载") }
-            item(key = "connections") {
-                OutlinedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showConnectionsEditor = true },
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("下载线程数", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "分片失败会自动回退单连接",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        Text(
-                            "${current.downloadConnections}",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                    }
-                }
-            }
             item(key = "custom-download") {
                 OutlinedCard(Modifier.fillMaxWidth()) {
                     Column(
@@ -212,7 +185,7 @@ internal fun UpdateSettingsScreen(
                         Column {
                             Text("自定义 APK 下载", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "输入完整 HTTPS 链接，使用相同的分片与安全校验",
+                                "输入完整 HTTPS 链接，下载后进行相同的安装包安全校验",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -325,17 +298,6 @@ internal fun UpdateSettingsScreen(
         }
     }
 
-    if (showConnectionsEditor) {
-        DownloadConnectionsDialog(
-            initial = current.downloadConnections,
-            onDismiss = { showConnectionsEditor = false },
-            onConfirm = { connections ->
-                persist(current.copy(downloadConnections = connections))
-                showConnectionsEditor = false
-            },
-        )
-    }
-
     editor?.let { editing ->
         AcceleratorDialog(
             editor = editing,
@@ -364,56 +326,6 @@ private fun SettingsSectionHeader(text: String, modifier: Modifier = Modifier) {
         modifier = modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
         color = MaterialTheme.colorScheme.primary,
         style = MaterialTheme.typography.titleSmall,
-    )
-}
-
-@Composable
-private fun DownloadConnectionsDialog(
-    initial: Int,
-    onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit,
-) {
-    var value by remember(initial) { mutableStateOf(initial.toString()) }
-    var error by remember(initial) { mutableStateOf<String?>(null) }
-    val focusManager = LocalFocusManager.current
-
-    fun confirm() {
-        val parsed = value.toIntOrNull()
-        error = if (parsed == null || parsed !in MinUpdateDownloadConnections..MaxUpdateDownloadConnections) {
-            "请输入 $MinUpdateDownloadConnections–$MaxUpdateDownloadConnections 之间的整数"
-        } else {
-            null
-        }
-        if (error == null) {
-            focusManager.clearFocus()
-            onConfirm(requireNotNull(parsed))
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("设置下载线程数") },
-        text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = {
-                    value = it.filter(Char::isDigit).take(2)
-                    error = null
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("线程数") },
-                supportingText = { Text(error ?: "默认 16；分片失败后自动回退为 1") },
-                isError = error != null,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Done,
-                ),
-                keyboardActions = KeyboardActions(onDone = { confirm() }),
-            )
-        },
-        confirmButton = { TextButton(onClick = { confirm() }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 

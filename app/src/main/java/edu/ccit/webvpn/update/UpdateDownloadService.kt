@@ -18,20 +18,33 @@ import edu.ccit.webvpn.BuildConfig
 import edu.ccit.webvpn.core.runtime.RuntimeLog
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 internal class UpdateDownloadService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(false)
+        .build()
     private var worker: Job? = null
+    @Volatile
+    private var activeCall: Call? = null
     @Volatile
     private var cancelRequested = false
     @Volatile
@@ -45,11 +58,8 @@ internal class UpdateDownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         latestStartId = startId
         startInForeground(UpdateDownloadStore.read(this))
-        if (intent?.action == ActionCancel) {
-            cancelRequested = true
-        } else {
-            cancelRequested = false
-        }
+        cancelRequested = intent?.action == ActionCancel
+        if (cancelRequested) activeCall?.cancel()
         if (worker?.isActive != true) {
             worker = serviceScope.launch { runWorker() }
         }
@@ -59,6 +69,7 @@ internal class UpdateDownloadService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        activeCall?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -76,6 +87,7 @@ internal class UpdateDownloadService : Service() {
             )
         }
         cancelRequested = true
+        activeCall?.cancel()
         worker?.cancel()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf(startId)
@@ -90,23 +102,21 @@ internal class UpdateDownloadService : Service() {
         } catch (error: Throwable) {
             val record = UpdateDownloadStore.read(this)
             if (record != null && record.status in ActiveStatuses) {
-                runCatching {
-                    val client = GopeedUpdateEngine.start(this)
-                    deleteTaskAndFile(client, record)
+                if (runCatching { validateDestination(record) }.isSuccess) {
+                    deleteDownloadedFile(record)
                 }
-                runCatching { File(record.destinationPath).delete() }
-                val message = error.message ?: "Gopeed 下载服务运行失败"
                 val failed = record.copy(
                     status = UpdateDownloadStatus.Failed,
-                    gopeedTaskId = null,
                     speedBytesPerSecond = 0L,
-                    errorMessage = message,
+                    verifiedVersionCode = null,
+                    errorMessage = error.message ?: "更新下载服务运行失败",
                 )
                 UpdateDownloadStore.write(this, failed)
                 outcome = DownloadOutcome.Failed(failed)
             }
         } finally {
-            runCatching { GopeedUpdateEngine.stop() }
+            activeCall?.cancel()
+            activeCall = null
             stopForeground(STOP_FOREGROUND_REMOVE)
             when (val result = outcome) {
                 is DownloadOutcome.Ready -> showReadyNotification(result.record)
@@ -125,111 +135,51 @@ internal class UpdateDownloadService : Service() {
         if (record.status == UpdateDownloadStatus.Failed) return DownloadOutcome.Failed(record)
         validateDestination(record)
 
-        val client = GopeedUpdateEngine.start(this)
         while (serviceScope.isActive) {
             record = UpdateDownloadStore.read(this) ?: return DownloadOutcome.Cancelled
             if (cancelRequested || record.status == UpdateDownloadStatus.Cancelled) {
-                deleteTaskAndFile(client, record)
-                UpdateDownloadStore.clear(this)
-                return DownloadOutcome.Cancelled
+                return cancelDownload(record)
             }
 
-            if (record.gopeedTaskId == null) {
-                record = createCurrentTask(client, record) ?: continue
-            }
-
-            val taskId = requireNotNull(record.gopeedTaskId)
-            val task = runCatching { client.getTask(taskId) }.getOrElse { error ->
-                recoverCompletedDownload(client, record, taskId)?.let { ready ->
-                    return DownloadOutcome.Ready(ready)
-                }
-                record = failCurrentCandidate(client, record, error.message ?: "无法读取 Gopeed 下载任务")
+            val downloaded = try {
+                downloadCurrentCandidate(record)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                coroutineContext.ensureActive()
+                if (cancelRequested) return cancelDownload(record)
+                record = failCurrentCandidate(record, error.message ?: "当前下载线路不可用")
                     ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
                 continue
             }
 
-            when (task.status) {
-                "ready", "pause" -> {
-                    val continued = runCatching { client.continueTask(taskId) }
-                    if (continued.isFailure) {
-                        record = failCurrentCandidate(
-                            client,
-                            record,
-                            continued.exceptionOrNull()?.message ?: "无法继续 Gopeed 下载任务",
-                        ) ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
-                        continue
-                    }
-                    record = persistProgress(record, task)
-                }
-                "running", "wait" -> record = persistProgress(record, task)
-                "error" -> {
-                    recoverCompletedDownload(client, record, taskId)?.let { ready ->
-                        return DownloadOutcome.Ready(ready)
-                    }
-                    record = failCurrentCandidate(client, record, "当前下载线路不可用")
-                        ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
-                    continue
-                }
-                "done" -> {
-                    val verified = verifyDownloadedPackage(record)
-                    val apk = verified.getOrNull()
-                    if (apk != null) {
-                        return DownloadOutcome.Ready(markReady(client, record, taskId, apk))
-                    }
-                    record = failCurrentCandidate(
-                        client,
-                        record,
-                        verified.exceptionOrNull()?.message ?: "安装包安全校验失败",
-                        retrySameRouteWithSingleConnection = false,
-                    ) ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
-                    continue
-                }
-                else -> {
-                    record = failCurrentCandidate(client, record, "Gopeed 返回了未知下载状态")
-                        ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
-                    continue
-                }
+            if (cancelRequested) return cancelDownload(downloaded)
+            val verified = verifyDownloadedPackage(downloaded)
+            val apk = verified.getOrNull()
+            if (apk != null) {
+                return DownloadOutcome.Ready(markReady(downloaded, apk))
             }
-
-            updateForeground(record)
-            delay(PollIntervalMillis)
+            record = failCurrentCandidate(
+                downloaded,
+                verified.exceptionOrNull()?.message ?: "安装包安全校验失败",
+            ) ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
         }
         return DownloadOutcome.NoWork
     }
 
-    private fun createCurrentTask(
-        client: GopeedUpdateClient,
-        record: UpdateDownloadRecord,
-    ): UpdateDownloadRecord? {
+    private suspend fun downloadCurrentCandidate(record: UpdateDownloadRecord): UpdateDownloadRecord {
         val parsedUrl = record.currentUrl.toHttpUrlOrNull()
         if (parsedUrl == null || !parsedUrl.isHttps) {
-            return failCurrentCandidate(client, record, "更新下载线路不是有效的 HTTPS 地址")
+            throw IOException("更新下载线路不是有效的 HTTPS 地址")
         }
         val destination = File(record.destinationPath)
         destination.parentFile?.mkdirs()
         if (destination.exists() && !destination.delete()) {
-            return failCurrentCandidate(client, record, "无法替换旧的更新安装包")
+            throw IOException("无法替换旧的更新安装包")
         }
-        val created = runCatching {
-            client.createTask(
-                url = record.currentUrl,
-                destinationDirectory = requireNotNull(destination.parentFile),
-                fileName = destination.name,
-                connections = record.activeConnections,
-                userAgent = "Cithub/${BuildConfig.VERSION_NAME} (Android)",
-            )
-        }
-        val taskId = created.getOrNull()
-        if (taskId == null) {
-            return failCurrentCandidate(
-                client,
-                record,
-                created.exceptionOrNull()?.message ?: "无法创建 Gopeed 下载任务",
-            )
-        }
-        return record.copy(
+
+        var current = record.copy(
             status = UpdateDownloadStatus.Downloading,
-            gopeedTaskId = taskId,
             downloadedBytes = 0L,
             speedBytesPerSecond = 0L,
             verifiedVersionCode = null,
@@ -238,32 +188,99 @@ internal class UpdateDownloadService : Service() {
             UpdateDownloadStore.write(this, it)
             updateForeground(it)
         }
+        val request = Request.Builder()
+            .url(parsedUrl)
+            .header("User-Agent", "Cithub/${BuildConfig.VERSION_NAME} (Android)")
+            .header("Accept-Encoding", "identity")
+            .get()
+            .build()
+        val call = httpClient.newCall(request)
+        activeCall = call
+        if (cancelRequested) {
+            call.cancel()
+            throw DownloadCancelledException()
+        }
+        try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) throw IOException("下载服务器返回 HTTP ${response.code}")
+                if (!response.request.url.isHttps) throw IOException("下载线路跳转到了非 HTTPS 地址")
+                val body = response.body
+                val responseSize = body.contentLength().takeIf { it > 0L }
+                if (record.assetSize > 0L && responseSize != null && responseSize != record.assetSize) {
+                    throw IOException("下载文件大小与 Release 记录不一致")
+                }
+                if (record.assetSize <= 0L && responseSize != null) {
+                    current = current.copy(assetSize = responseSize).also {
+                        UpdateDownloadStore.write(this, it)
+                        updateForeground(it)
+                    }
+                }
+
+                var downloadedBytes = 0L
+                var measuredBytes = 0L
+                var measurementStartedAt = System.nanoTime()
+                var lastProgressAt = measurementStartedAt
+                body.byteStream().use { input ->
+                    destination.outputStream().buffered(DownloadBufferSize).use { output ->
+                        val buffer = ByteArray(DownloadBufferSize)
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            if (cancelRequested) throw DownloadCancelledException()
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                            downloadedBytes += count
+                            measuredBytes += count
+                            val now = System.nanoTime()
+                            if (now - lastProgressAt >= ProgressUpdateNanos) {
+                                val elapsed = (now - measurementStartedAt).coerceAtLeast(1L)
+                                val speed = (measuredBytes * NanosPerSecond / elapsed).coerceAtLeast(0L)
+                                current = persistProgress(current, downloadedBytes, speed)
+                                measuredBytes = 0L
+                                measurementStartedAt = now
+                                lastProgressAt = now
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+                if (record.assetSize > 0L && downloadedBytes != record.assetSize) {
+                    throw IOException("下载文件大小与 Release 记录不一致")
+                }
+                current = persistProgress(current, downloadedBytes, 0L)
+            }
+            return current
+        } finally {
+            if (activeCall === call) activeCall = null
+        }
     }
 
-    private fun persistProgress(record: UpdateDownloadRecord, task: GopeedTask): UpdateDownloadRecord =
-        record.copy(
-            status = UpdateDownloadStatus.Downloading,
-            downloadedBytes = task.progress.downloaded.coerceAtLeast(0L),
-            speedBytesPerSecond = task.progress.speed.coerceAtLeast(0L),
-            errorMessage = null,
-        ).also { UpdateDownloadStore.write(this, it) }
+    private fun persistProgress(
+        record: UpdateDownloadRecord,
+        downloadedBytes: Long,
+        speedBytesPerSecond: Long,
+    ): UpdateDownloadRecord = record.copy(
+        status = UpdateDownloadStatus.Downloading,
+        downloadedBytes = downloadedBytes.coerceAtLeast(0L),
+        speedBytesPerSecond = speedBytesPerSecond.coerceAtLeast(0L),
+        errorMessage = null,
+    ).also {
+        UpdateDownloadStore.write(this, it)
+        updateForeground(it)
+    }
 
     private fun failCurrentCandidate(
-        client: GopeedUpdateClient,
         record: UpdateDownloadRecord,
         message: String,
-        retrySameRouteWithSingleConnection: Boolean = true,
     ): UpdateDownloadRecord? {
-        deleteTaskAndFile(client, record)
-        record.nextDownloadAttempt(retrySameRouteWithSingleConnection)?.let { next ->
+        deleteDownloadedFile(record)
+        record.nextDownloadAttempt()?.let { next ->
             RuntimeLog.get(this).warning(
                 source = "update_download",
                 event = "candidate_fallback",
                 fields = mapOf(
                     "url_index" to record.urlIndex,
-                    "connections" to record.activeConnections,
                     "next_url_index" to next.urlIndex,
-                    "next_connections" to next.activeConnections,
                     "reason" to message,
                 ),
             )
@@ -275,30 +292,12 @@ internal class UpdateDownloadService : Service() {
 
         val failed = record.copy(
             status = UpdateDownloadStatus.Failed,
-            gopeedTaskId = null,
             speedBytesPerSecond = 0L,
             verifiedVersionCode = null,
             errorMessage = message,
         )
         UpdateDownloadStore.write(this, failed)
         return null
-    }
-
-    private fun recoverCompletedDownload(
-        client: GopeedUpdateClient,
-        record: UpdateDownloadRecord,
-        taskId: String,
-    ): UpdateDownloadRecord? = verifyDownloadedPackage(record).getOrNull()?.let { apk ->
-        RuntimeLog.get(this).info(
-            source = "update_download",
-            event = "completed_file_recovered",
-            fields = mapOf(
-                "url_index" to record.urlIndex,
-                "connections" to record.activeConnections,
-                "downloaded_bytes" to File(record.destinationPath).length(),
-            ),
-        )
-        markReady(client, record, taskId, apk)
     }
 
     private fun verifyDownloadedPackage(record: UpdateDownloadRecord): Result<VerifiedUpdateApk> = runCatching {
@@ -312,40 +311,37 @@ internal class UpdateDownloadService : Service() {
     }
 
     private fun markReady(
-        client: GopeedUpdateClient,
         record: UpdateDownloadRecord,
-        taskId: String,
         apk: VerifiedUpdateApk,
-    ): UpdateDownloadRecord {
-        runCatching { client.deleteTask(taskId, force = false) }
-        return record.copy(
-            status = UpdateDownloadStatus.Ready,
-            version = apk.version.toString(),
-            gopeedTaskId = null,
-            downloadedBytes = File(record.destinationPath).length(),
-            speedBytesPerSecond = 0L,
-            verifiedVersionCode = apk.versionCode,
-            errorMessage = null,
-        ).also { ready ->
-            UpdateDownloadStore.write(this, ready)
-            RuntimeLog.get(this).info(
-                source = "update_download",
-                event = "ready_to_install",
-                fields = mapOf(
-                    "version" to ready.version,
-                    "version_code" to ready.verifiedVersionCode,
-                    "url_index" to ready.urlIndex,
-                    "connections" to ready.activeConnections,
-                    "downloaded_bytes" to ready.downloadedBytes,
-                ),
-            )
-        }
+    ): UpdateDownloadRecord = record.copy(
+        status = UpdateDownloadStatus.Ready,
+        version = apk.version.toString(),
+        downloadedBytes = File(record.destinationPath).length(),
+        speedBytesPerSecond = 0L,
+        verifiedVersionCode = apk.versionCode,
+        errorMessage = null,
+    ).also { ready ->
+        UpdateDownloadStore.write(this, ready)
+        RuntimeLog.get(this).info(
+            source = "update_download",
+            event = "ready_to_install",
+            fields = mapOf(
+                "version" to ready.version,
+                "version_code" to ready.verifiedVersionCode,
+                "url_index" to ready.urlIndex,
+                "downloaded_bytes" to ready.downloadedBytes,
+            ),
+        )
     }
 
-    private fun deleteTaskAndFile(client: GopeedUpdateClient, record: UpdateDownloadRecord) {
-        record.gopeedTaskId?.let { taskId ->
-            runCatching { client.deleteTask(taskId, force = true) }
-        }
+    private fun cancelDownload(record: UpdateDownloadRecord): DownloadOutcome {
+        activeCall?.cancel()
+        deleteDownloadedFile(record)
+        UpdateDownloadStore.clear(this)
+        return DownloadOutcome.Cancelled
+    }
+
+    private fun deleteDownloadedFile(record: UpdateDownloadRecord) {
         runCatching { File(record.destinationPath).delete() }
     }
 
@@ -384,9 +380,8 @@ internal class UpdateDownloadService : Service() {
             )
             .setContentText(
                 record?.speedBytesPerSecond?.takeIf { it > 0L }
-                    ?.let { "${record.connectionModeLabel()} · ${formatNotificationSize(it)}/s" }
-                    ?: record?.connectionModeLabel()
-                    ?: "Gopeed 下载",
+                    ?.let { "正在下载 · ${formatNotificationSize(it)}/s" }
+                    ?: "正在下载",
             )
             .setContentIntent(appPendingIntent())
             .setOnlyAlertOnce(true)
@@ -465,6 +460,8 @@ internal class UpdateDownloadService : Service() {
         data class Failed(val record: UpdateDownloadRecord) : DownloadOutcome
     }
 
+    private class DownloadCancelledException : IOException("下载已取消")
+
     companion object {
         private const val ActionStart = "edu.ccit.webvpn.update.START"
         private const val ActionCancel = "edu.ccit.webvpn.update.CANCEL"
@@ -473,7 +470,9 @@ internal class UpdateDownloadService : Service() {
         private const val ResultNotificationId = 2_202
         private const val AppRequestCode = 2_201
         private const val CancelRequestCode = 2_202
-        private const val PollIntervalMillis = 750L
+        private const val DownloadBufferSize = 64 * 1024
+        private const val NanosPerSecond = 1_000_000_000L
+        private const val ProgressUpdateNanos = 500_000_000L
         private val ActiveStatuses = setOf(UpdateDownloadStatus.Queued, UpdateDownloadStatus.Downloading)
 
         fun start(context: Context) {
@@ -498,9 +497,6 @@ private fun UpdateDownloadRecord.progressPercent(): Int? {
         .coerceIn(0L, 100L)
         .toInt()
 }
-
-private fun UpdateDownloadRecord.connectionModeLabel(): String =
-    if (singleConnectionFallback) "Gopeed 单连接回退" else "Gopeed · $activeConnections 连接"
 
 private fun formatNotificationSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))

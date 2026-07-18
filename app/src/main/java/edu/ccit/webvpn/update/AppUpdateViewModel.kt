@@ -34,8 +34,6 @@ internal sealed interface AppUpdateUiState {
         val release: AppRelease,
         val progress: Float?,
         val speedBytesPerSecond: Long,
-        val connections: Int,
-        val singleConnectionFallback: Boolean,
     ) : AppUpdateUiState
     data class Ready(val release: AppRelease, val apk: VerifiedUpdateApk) : AppUpdateUiState
     data class Failed(
@@ -139,7 +137,6 @@ class AppUpdateViewModel @Inject constructor(
                     destination = destination,
                     release = release,
                     downloadUrls = urls,
-                    connections = settings.downloadConnections,
                     customDownload = customDownload,
                 )
                 withContext(Dispatchers.IO) { UpdateDownloadStore.write(context, record) }
@@ -384,6 +381,4 @@ private fun UpdateDownloadRecord.toDownloadingState(): AppUpdateUiState.Download
             null
         },
         speedBytesPerSecond = speedBytesPerSecond,
-        connections = activeConnections,
-        singleConnectionFallback = singleConnectionFallback,
     )

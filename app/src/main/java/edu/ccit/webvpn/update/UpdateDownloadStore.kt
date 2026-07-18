@@ -2,7 +2,6 @@ package edu.ccit.webvpn.update
 
 import android.content.Context
 import java.io.File
-import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -31,20 +30,14 @@ internal data class UpdateDownloadRecord(
     val prerelease: Boolean,
     val downloadUrls: List<String>,
     val urlIndex: Int = 0,
-    val gopeedTaskId: String? = null,
     val downloadedBytes: Long = 0L,
     val speedBytesPerSecond: Long = 0L,
-    val connections: Int = DefaultConnections,
-    val singleConnectionFallback: Boolean = false,
     val customDownload: Boolean = false,
     val verifiedVersionCode: Long? = null,
     val errorMessage: String? = null,
 ) {
     val currentUrl: String
         get() = downloadUrls[urlIndex]
-
-    val activeConnections: Int
-        get() = if (singleConnectionFallback) 1 else connections.coerceIn(1, 64)
 
     fun toRelease(): AppRelease = AppRelease(
         version = requireNotNull(SemanticVersion.parse(version)),
@@ -61,13 +54,10 @@ internal data class UpdateDownloadRecord(
     }
 
     companion object {
-        const val DefaultConnections = 16
-
         fun create(
             destination: File,
             release: AppRelease,
             downloadUrls: List<String>,
-            connections: Int = DefaultConnections,
             customDownload: Boolean = false,
         ): UpdateDownloadRecord {
             val asset = requireNotNull(release.asset)
@@ -84,29 +74,21 @@ internal data class UpdateDownloadRecord(
                 assetUrl = asset.downloadUrl,
                 prerelease = release.prerelease,
                 downloadUrls = downloadUrls,
-                connections = connections.coerceAtLeast(1),
                 customDownload = customDownload,
             )
         }
     }
 }
 
-internal fun UpdateDownloadRecord.nextDownloadAttempt(
-    retrySameRouteWithSingleConnection: Boolean = true,
-): UpdateDownloadRecord? {
-    val retrySingleConnection = retrySameRouteWithSingleConnection &&
-        connections > 1 &&
-        !singleConnectionFallback
+internal fun UpdateDownloadRecord.nextDownloadAttempt(): UpdateDownloadRecord? {
     val nextUrlIndex = urlIndex + 1
-    if (!retrySingleConnection && nextUrlIndex !in downloadUrls.indices) return null
+    if (nextUrlIndex !in downloadUrls.indices) return null
 
     return copy(
         status = UpdateDownloadStatus.Queued,
-        urlIndex = if (retrySingleConnection) urlIndex else nextUrlIndex,
-        gopeedTaskId = null,
+        urlIndex = nextUrlIndex,
         downloadedBytes = 0L,
         speedBytesPerSecond = 0L,
-        singleConnectionFallback = retrySingleConnection,
         verifiedVersionCode = null,
         errorMessage = null,
     )
@@ -114,8 +96,7 @@ internal fun UpdateDownloadRecord.nextDownloadAttempt(
 
 internal object UpdateDownloadStore {
     const val PreferencesName = "app_update_download"
-    private const val RecordKey = "gopeed_download"
-    private const val ApiTokenKey = "gopeed_api_token"
+    private const val RecordKey = "update_download"
     private val json = Json { ignoreUnknownKeys = true }
 
     fun read(context: Context): UpdateDownloadRecord? = preferences(context)
@@ -135,16 +116,6 @@ internal object UpdateDownloadStore {
 
     fun clear(context: Context) {
         preferences(context).edit().remove(RecordKey).commit()
-    }
-
-    fun apiToken(context: Context): String {
-        val preferences = preferences(context)
-        preferences.getString(ApiTokenKey, null)?.takeIf(String::isNotBlank)?.let { return it }
-        val token = UUID.randomUUID().toString()
-        check(preferences.edit().putString(ApiTokenKey, token).commit()) {
-            "无法保存 Gopeed 本地接口令牌"
-        }
-        return token
     }
 
     private fun preferences(context: Context) =

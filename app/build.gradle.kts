@@ -110,7 +110,6 @@ kotlin {
 }
 
 dependencies {
-    implementation(files("libs/gopeed-core-1.9.3-arm64.aar"))
     implementation(project(":core:academic"))
     implementation(project(":core:captcha"))
     implementation(project(":core:runtime"))

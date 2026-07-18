@@ -134,14 +134,9 @@ internal fun AppUpdateHost(
                             Text("已下载 ${(progress * 100).toInt()}%")
                         }
                         Text(
-                            (if (current.singleConnectionFallback) {
-                                "Gopeed · 已自动回退单连接"
-                            } else {
-                                "Gopeed · ${current.connections} 连接"
-                            }) +
-                                current.speedBytesPerSecond.takeIf { it > 0L }
-                                    ?.let { speed -> " · ${formatSize(speed)}/s" }
-                                    .orEmpty(),
+                            current.speedBytesPerSecond.takeIf { it > 0L }
+                                ?.let { speed -> "下载速度 ${formatSize(speed)}/s" }
+                                ?: "正在下载",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )

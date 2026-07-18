@@ -76,12 +76,7 @@ data class RssFeedSettings(
 data class UpdateSettings(
     val previewReleases: Boolean = false,
     val githubAccelerators: List<String> = DefaultGithubAccelerators,
-    val downloadConnections: Int = DefaultUpdateDownloadConnections,
 )
-
-internal const val MinUpdateDownloadConnections = 1
-internal const val DefaultUpdateDownloadConnections = 16
-internal const val MaxUpdateDownloadConnections = 64
 
 internal val DefaultGithubAccelerators = listOf(
     "https://ghproxy.net",
@@ -173,7 +168,6 @@ private val WechatRssUrlsKey = stringPreferencesKey("rss_wechat_urls")
 private val NewsRssUrlsKey = stringPreferencesKey("rss_news_urls")
 private val PreviewReleasesKey = booleanPreferencesKey("update_preview_releases")
 private val GithubAcceleratorsKey = stringPreferencesKey("update_github_accelerators")
-private val DownloadConnectionsKey = intPreferencesKey("update_download_connections")
 
 internal fun readThemeSettings(preferences: Preferences): ThemeSettings = ThemeSettings(
     theme = preferences[ThemeKey].enumOr(Theme.DYNAMIC),
@@ -248,8 +242,6 @@ internal fun readUpdateSettings(preferences: Preferences): UpdateSettings = Upda
         ?.distinct()
         ?.toList()
         ?: DefaultGithubAccelerators,
-    downloadConnections = (preferences[DownloadConnectionsKey] ?: DefaultUpdateDownloadConnections)
-        .coerceIn(MinUpdateDownloadConnections, MaxUpdateDownloadConnections),
 )
 
 internal fun writeUpdateSettings(
@@ -261,8 +253,6 @@ internal fun writeUpdateSettings(
         .mapNotNull(::normalizeGithubAccelerator)
         .distinct()
         .joinToString("\n")
-    preferences[DownloadConnectionsKey] = value.downloadConnections
-        .coerceIn(MinUpdateDownloadConnections, MaxUpdateDownloadConnections)
 }
 
 private fun Preferences.readRssUrls(key: Preferences.Key<String>, defaults: List<String>): List<String> =

@@ -43,7 +43,6 @@ object UpgradeHousekeeping {
             val stalePaths = buildList {
                 addAll(detachChildren(appContext.cacheDir, suffix))
                 detachDirectory(File(appContext.noBackupFilesDir, "home_feed_cache"), suffix)?.let(::add)
-                detachDirectory(GopeedUpdateEngine.storageDirectory(appContext), suffix)?.let(::add)
                 runCatching { detachDirectory(UpdateInstaller.updateDirectory(appContext), suffix) }
                     .getOrNull()
                     ?.let(::add)
