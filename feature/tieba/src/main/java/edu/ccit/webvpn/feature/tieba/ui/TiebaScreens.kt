@@ -174,6 +174,7 @@ import edu.ccit.webvpn.feature.tieba.LoadPicPageData
 import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TiebaAccount
 import edu.ccit.webvpn.feature.tieba.TiebaContent
+import edu.ccit.webvpn.feature.tieba.TiebaModeratorRole
 import edu.ccit.webvpn.feature.tieba.TiebaRuntime
 import edu.ccit.webvpn.feature.tieba.TiebaUserPost
 import edu.ccit.webvpn.feature.tieba.TiebaUserProfile
@@ -846,7 +847,7 @@ private fun ThreadRow(
                         displayName(thread.authorName, thread.authorNickname, showBothNames).ifBlank { "贴吧用户" },
                         style = MaterialTheme.typography.labelLarge,
                     )
-                    if (thread.authorIsManager) AuthorIdentityBadges("", 0, isManager = true)
+                    AuthorIdentityBadges("", 0, thread.authorModeratorRole)
                     if (thread.lastReplyTime.isNotBlank()) {
                         Text(thread.lastReplyTime, style = MaterialTheme.typography.labelSmall, color = CcitColors.InkMuted)
                     }
@@ -1227,7 +1228,7 @@ private fun FloorHeader(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
             )
-            AuthorIdentityBadges(floor.authorTitle, floor.authorLevel, floor.authorIsManager)
+            AuthorIdentityBadges(floor.authorTitle, floor.authorLevel, floor.authorModeratorRole)
             Text(
                 listOfNotNull(
                     floor.time.takeIf(String::isNotBlank),
@@ -1251,20 +1252,20 @@ private fun FloorHeader(
 }
 
 @Composable
-private fun AuthorIdentityBadges(title: String, level: Int, isManager: Boolean = false) {
-    if (title.isBlank() && level <= 0 && !isManager) return
+private fun AuthorIdentityBadges(title: String, level: Int, moderatorRole: TiebaModeratorRole? = null) {
+    if (title.isBlank() && level <= 0 && moderatorRole == null) return
     Row(
         modifier = Modifier.padding(top = 3.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (isManager) {
+        moderatorRole?.let { role ->
             Surface(
                 color = MaterialTheme.colorScheme.tertiaryContainer,
                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                 shape = MaterialTheme.shapes.extraSmall,
             ) {
-                Text("吧主", Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+                Text(role.label, Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
             }
         }
         title.takeIf(String::isNotBlank)?.let {
@@ -1575,7 +1576,7 @@ private fun FloorReplyItem(
                     author,
                     style = MaterialTheme.typography.labelLarge,
                 )
-                AuthorIdentityBadges(reply.authorTitle, reply.authorLevel, reply.authorIsManager)
+                AuthorIdentityBadges(reply.authorTitle, reply.authorLevel, reply.authorModeratorRole)
                 if (reply.time.isNotBlank()) {
                     Text(
                         listOfNotNull(

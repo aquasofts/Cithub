@@ -14,6 +14,10 @@ const val TARGET_FORUM_URL = "https://tieba.baidu.com/f?kw=%E9%95%BF%E6%98%A5%E5
 enum class ForumSort { BY_REPLY, BY_SEND }
 enum class FloorSort { ASCENDING, DESCENDING, HOT }
 enum class SignOutcome { SUCCESS, ALREADY_SIGNED, FAILED }
+enum class TiebaModeratorRole(val label: String) {
+    OWNER("吧主"),
+    ASSISTANT("小吧主"),
+}
 
 @Immutable
 data class TiebaReadingPreferences(
@@ -107,7 +111,7 @@ data class ForumThread(
     val forumId: Long = TARGET_FORUM_ID,
     val forumName: String = TARGET_FORUM_NAME,
     val richExcerpt: List<TiebaContent> = emptyList(),
-    val authorIsManager: Boolean = false,
+    val authorModeratorRole: TiebaModeratorRole? = null,
 )
 
 @Immutable
@@ -178,7 +182,7 @@ data class FloorReply(
     val authorLevel: Int = 0,
     val authorTitle: String = "",
     val authorIp: String = "",
-    val authorIsManager: Boolean = false,
+    val authorModeratorRole: TiebaModeratorRole? = null,
 )
 
 @Immutable
@@ -222,7 +226,7 @@ data class ThreadFloor(
     val authorLevel: Int = 0,
     val authorTitle: String = "",
     val authorIp: String = "",
-    val authorIsManager: Boolean = false,
+    val authorModeratorRole: TiebaModeratorRole? = null,
 )
 
 @Immutable

@@ -35,6 +35,7 @@ import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaContent
+import edu.ccit.webvpn.feature.tieba.TiebaModeratorRole
 import edu.ccit.webvpn.feature.tieba.TiebaUserForum
 import edu.ccit.webvpn.feature.tieba.TiebaUserPost
 import edu.ccit.webvpn.feature.tieba.TiebaUserPostPage
@@ -1078,7 +1079,7 @@ class TiebaNetworkRepository internal constructor(
             forumId = source.forumInfo?.id ?: fallbackForumId,
             forumName = source.forumInfo?.name.orEmpty().ifBlank { fallbackForumName },
             richExcerpt = richExcerpt,
-            authorIsManager = author?.is_manager == 1 || author?.is_bawu == 1,
+            authorModeratorRole = author?.moderatorRole(),
         )
     }
 
@@ -1137,7 +1138,7 @@ class TiebaNetworkRepository internal constructor(
             authorLevel = author.level_id,
             authorTitle = author.level_name,
             authorIp = author.ip_address.ifBlank { author.ip },
-            authorIsManager = author.is_manager == 1 || author.is_bawu == 1,
+            authorModeratorRole = author.moderatorRole(),
         )
     }
 
@@ -1156,8 +1157,15 @@ class TiebaNetworkRepository internal constructor(
             authorLevel = author?.level_id ?: 0,
             authorTitle = author?.level_name.orEmpty(),
             authorIp = author?.ip_address.orEmpty().ifBlank { author?.ip.orEmpty() },
-            authorIsManager = author?.is_manager == 1 || author?.is_bawu == 1,
+            authorModeratorRole = author?.moderatorRole(),
         )
+    }
+
+    private fun User.moderatorRole(): TiebaModeratorRole? = when {
+        is_bawu == 1 && bawu_type.equals("manager", ignoreCase = true) -> TiebaModeratorRole.OWNER
+        is_bawu == 1 -> TiebaModeratorRole.ASSISTANT
+        is_manager == 1 -> TiebaModeratorRole.OWNER
+        else -> null
     }
 
     private fun mapUserProfile(response: ProfileResponse): TiebaUserProfile {

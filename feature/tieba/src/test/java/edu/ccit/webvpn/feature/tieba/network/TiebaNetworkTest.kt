@@ -36,6 +36,7 @@ import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME
 import edu.ccit.webvpn.feature.tieba.TiebaContent
+import edu.ccit.webvpn.feature.tieba.TiebaModeratorRole
 import edu.ccit.webvpn.feature.tieba.data.AccountEntity
 import edu.ccit.webvpn.feature.tieba.data.TiebaClientConfig
 import edu.ccit.webvpn.feature.tieba.data.TiebaSettingsRepository
@@ -126,7 +127,7 @@ class TiebaNetworkTest {
         assertEquals("9", forum.threads.single().id)
         assertEquals("#(泪)", forum.threads.single().excerpt)
         assertEquals("image_emoticon9", forum.threads.single().richExcerpt.filterIsInstance<TiebaContent.Emoticon>().single().id)
-        assertTrue(forum.threads.single().authorIsManager)
+        assertEquals(TiebaModeratorRole.OWNER, forum.threads.single().authorModeratorRole)
         assertTrue(forum.forum.signed)
         assertEquals(6, forum.forum.signedDays)
         assertEquals("fresh-forum-tbs", forum.forum.tbs)
@@ -145,7 +146,8 @@ class TiebaNetworkTest {
         assertEquals(8, thread.floors.single().authorLevel)
         assertEquals("渐入佳境", thread.floors.single().authorTitle)
         assertEquals("吉林", thread.floors.single().authorIp)
-        assertTrue(thread.floors.single().authorIsManager)
+        assertEquals(TiebaModeratorRole.ASSISTANT, thread.floors.single().authorModeratorRole)
+        assertEquals(TiebaModeratorRole.OWNER, thread.floors.single().replies.single().authorModeratorRole)
     }
 
     @Test
@@ -1243,8 +1245,26 @@ class TiebaNetworkTest {
                 ),
             ),
             user_list = listOf(
-                User(id = 4, name = "user", nameShow = "昵称", level_id = 8, level_name = "渐入佳境", ip_address = "吉林", is_manager = 1),
-                User(id = 5, name = "reply", nameShow = "回复者", level_id = 5, level_name = "小有名气", ip_address = "北京"),
+                User(
+                    id = 4,
+                    name = "user",
+                    nameShow = "昵称",
+                    level_id = 8,
+                    level_name = "渐入佳境",
+                    ip_address = "吉林",
+                    is_bawu = 1,
+                    bawu_type = "assist",
+                ),
+                User(
+                    id = 5,
+                    name = "reply",
+                    nameShow = "回复者",
+                    level_id = 5,
+                    level_name = "小有名气",
+                    ip_address = "北京",
+                    is_bawu = 1,
+                    bawu_type = "manager",
+                ),
             ),
         ),
     )
