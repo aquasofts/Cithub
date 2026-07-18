@@ -5,11 +5,15 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.29`
-- Version code: `35`
+- Version name: `2.1.30`
+- Version code: `36`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.30 (versionCode 36) — 2026-07-18
+
+- Fixed the GitHub Actions release pipeline so version tags build the signed Full and Lite APKs and publish them automatically as a verified pre-release with SHA-256 checksums.
 
 ### 2.1.29 (versionCode 35) — 2026-07-18
 

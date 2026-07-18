@@ -1,6 +1,6 @@
 # GitHub pre-release APK setup
 
-The `Build and publish APKs` workflow builds the Full and Lite release variants whenever a semantic-version tag is pushed. Tags with `V`, `v`, or no prefix are accepted, for example `V2.1.29`.
+The `Build and publish APKs` workflow is version-independent. It builds the Full and Lite release variants whenever any new semantic-version tag is pushed. Tags with `V`, `v`, or no prefix are accepted, for example `V2.1.30`, `v2.1.31`, or `2.2.0`.
 
 The workflow always publishes a GitHub **pre-release** and uploads:
 
@@ -51,19 +51,21 @@ Open:
 
 Select `Read and write permissions`, then save. The workflow also declares `contents: write` explicitly.
 
-## 4. Publish a new pre-release
+## 4. Publish every new version as a pre-release
 
 Before creating a tag, update both current-version locations so that they match:
 
 - `VERSION_HISTORY.md`
 - `app/build.gradle.kts`
 
-Commit and push the version update, then create a tag on that commit:
+For every future version, commit and push the matching version update first, then create a new tag on that commit. For example:
 
 ```powershell
 git tag V2.1.30
 git push origin V2.1.30
 ```
+
+The example version is not hardcoded. The next releases can use tags such as `V2.1.31`, `V2.2.0`, and so on. Each pushed version tag creates or updates its own GitHub pre-release automatically.
 
 The tag version must match the current `versionName`. The workflow uses the current `versionCode` from the repository instead of inventing a different CI-only code.
 
