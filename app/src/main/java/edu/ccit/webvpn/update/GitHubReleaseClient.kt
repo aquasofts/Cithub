@@ -69,13 +69,12 @@ internal sealed interface AcceleratorAvailability {
 
 internal class GitHubAcceleratorChecker(
     private val userAgent: String,
-    private val probeUrl: String = CITHUB_RELEASES_API,
+    private val probeUrl: String = CITHUB_ACCELERATOR_PROBE_APK,
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .callTimeout(10, TimeUnit.SECONDS)
         .build(),
-    private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     suspend fun check(accelerator: String): AcceleratorAvailability = withContext(Dispatchers.IO) {
         val startedAt = System.nanoTime()
@@ -83,17 +82,28 @@ internal class GitHubAcceleratorChecker(
             val candidate = githubUrlCandidates(probeUrl, listOf(accelerator)).first()
             val request = Request.Builder()
                 .url(candidate)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
+                .header("Accept", "application/vnd.android.package-archive")
+                .header("Range", "bytes=0-3")
                 .header("User-Agent", userAgent)
                 .build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                json.decodeFromString<List<GitHubReleaseDto>>(response.body.string())
+                val source = response.body.source()
+                if (!source.request(ApkHeader.size.toLong())) {
+                    throw IOException("APK 响应为空")
+                }
+                val header = source.readByteArray(ApkHeader.size.toLong())
+                if (!header.contentEquals(ApkHeader)) {
+                    throw IOException("响应不是 APK")
+                }
             }
             AcceleratorAvailability.Available(
                 latencyMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt),
             )
         }.getOrElse { AcceleratorAvailability.Unavailable }
+    }
+
+    private companion object {
+        val ApkHeader = byteArrayOf(0x50, 0x4b, 0x03, 0x04)
     }
 }

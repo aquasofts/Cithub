@@ -5,11 +5,17 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.0`
-- Version code: `43`
+- Version name: `2.2.1`
+- Version code: `44`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.2.1 (versionCode 44) — 2026-07-18
+
+- Added `ghproxy.net` and `gh-proxy.org` as the first and second default GitHub accelerator routes while preserving existing user-defined routes and priority.
+- Added automatic and manual accelerator availability checks in Settings, including a ranged probe of a real Cithub Release APK and latency display so invalid HTTP 200 pages are not reported as usable download routes.
+- Replaced the system update downloader with the ARM64-only Gopeed Core 1.9.3 engine, using up to eight HTTP connections in a foreground data-sync service while preserving route fallback and APK security verification; Gopeed UI/application assets are not included.
 
 ### 2.2.0 (versionCode 43) — 2026-07-18
 

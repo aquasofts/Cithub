@@ -80,7 +80,7 @@ data class UpdateSettings(
 
 internal val DefaultGithubAccelerators = listOf(
     "https://ghproxy.net",
-    "https://gh-proxy.com",
+    "https://gh-proxy.org",
 )
 
 @Immutable

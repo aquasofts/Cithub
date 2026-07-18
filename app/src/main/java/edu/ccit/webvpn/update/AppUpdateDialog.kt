@@ -109,6 +109,14 @@ internal fun AppUpdateHost(
                             )
                             Text("已下载 ${(progress * 100).toInt()}%")
                         }
+                        Text(
+                            "Gopeed · 最多 ${current.connections} 连接" +
+                                current.speedBytesPerSecond.takeIf { it > 0L }
+                                    ?.let { speed -> " · ${formatSize(speed)}/s" }
+                                    .orEmpty(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 },
                 confirmButton = {},

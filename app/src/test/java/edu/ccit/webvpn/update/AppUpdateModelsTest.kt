@@ -148,23 +148,25 @@ class AppUpdateModelsTest {
     }
 
     @Test
-    fun acceleratorCheckerRequiresAValidGithubReleaseResponse() = runBlocking {
+    fun acceleratorCheckerRequiresAValidApkResponse() = runBlocking {
         val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(200).setBody("[]"))
-        server.enqueue(MockResponse().setResponseCode(200).setBody("not-json"))
+        server.enqueue(MockResponse().setResponseCode(206).setBody("PK\u0003\u0004payload"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("<html><title>Proxy home</title></html>"))
         try {
             val checker = GitHubAcceleratorChecker(
                 userAgent = "test",
-                probeUrl = "https://api.github.com/repos/aquasofts/Cithub/releases?per_page=1",
+                probeUrl = CITHUB_ACCELERATOR_PROBE_APK,
             )
             val accelerator = server.url("/proxy").toString().trimEnd('/')
 
             assertTrue(checker.check(accelerator) is AcceleratorAvailability.Available)
             assertEquals(AcceleratorAvailability.Unavailable, checker.check(accelerator))
             assertEquals(
-                "/proxy/https://api.github.com/repos/aquasofts/Cithub/releases?per_page=1",
+                "/proxy/https://github.com/aquasofts/Cithub/releases/download/V2.2.0/" +
+                    "Cithub-2.2.0-auto-captcha-performance.apk",
                 server.takeRequest().path,
             )
+            assertEquals("bytes=0-3", server.takeRequest().getHeader("Range"))
         } finally {
             server.close()
         }

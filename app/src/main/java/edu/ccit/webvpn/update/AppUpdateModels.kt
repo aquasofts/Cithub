@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 
 internal const val CITHUB_RELEASES_API =
     "https://api.github.com/repos/aquasofts/Cithub/releases?per_page=20"
+internal const val CITHUB_ACCELERATOR_PROBE_APK =
+    "https://github.com/aquasofts/Cithub/releases/download/V2.2.0/" +
+        "Cithub-2.2.0-auto-captcha-performance.apk"
 
 @Serializable
 internal data class GitHubReleaseDto(

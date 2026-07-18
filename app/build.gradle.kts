@@ -38,9 +38,12 @@ android {
         applicationId = "edu.ccit.webvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = ciVersionCode ?: 43
-        versionName = ciVersionName ?: "2.2.0"
+        versionCode = ciVersionCode ?: 44
+        versionName = ciVersionName ?: "2.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildFeatures {
@@ -107,6 +110,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(files("libs/gopeed-core-1.9.3-arm64.aar"))
     implementation(project(":core:academic"))
     implementation(project(":core:captcha"))
     implementation(project(":core:runtime"))

@@ -102,7 +102,7 @@ class SettingsPreferencesTest {
     fun updateSettingsDefaultToFormalAndNormalizeAccelerators() {
         assertEquals(UpdateSettings(), readUpdateSettings(emptyPreferences()))
         assertEquals(
-            listOf("https://ghproxy.net", "https://gh-proxy.com"),
+            listOf("https://ghproxy.net", "https://gh-proxy.org"),
             readUpdateSettings(emptyPreferences()).githubAccelerators,
         )
         assertEquals("https://mirror.example/proxy", normalizeGithubAccelerator(" https://mirror.example/proxy/ "))

@@ -1,9 +1,6 @@
 package edu.ccit.webvpn.update
 
-import android.app.DownloadManager
 import android.content.Context
-import android.net.Uri
-import android.os.Environment
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,30 +10,32 @@ import edu.ccit.webvpn.BuildConfig
 import edu.ccit.webvpn.settings.SettingsRepository
 import java.io.File
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 @Immutable
 internal sealed interface AppUpdateUiState {
     data object Hidden : AppUpdateUiState
     data class Available(val release: AppRelease) : AppUpdateUiState
-    data class Downloading(val release: AppRelease, val progress: Float?) : AppUpdateUiState
+    data class Downloading(
+        val release: AppRelease,
+        val progress: Float?,
+        val speedBytesPerSecond: Long,
+        val connections: Int,
+    ) : AppUpdateUiState
     data class Ready(val release: AppRelease, val apk: VerifiedUpdateApk) : AppUpdateUiState
     data class Failed(val release: AppRelease, val message: String) : AppUpdateUiState
 }
@@ -53,9 +52,6 @@ class AppUpdateViewModel @Inject constructor(
 ) : ViewModel() {
     private val flavor = updateFlavor(BuildConfig.FLAVOR)
     private val updateSettings = settingsRepository.updateSettings
-    private val downloadManager = context.getSystemService(DownloadManager::class.java)
-    private val preferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
-    private val json = Json { ignoreUnknownKeys = true }
     private val mutableState = MutableStateFlow<AppUpdateUiState>(AppUpdateUiState.Hidden)
     internal val state: StateFlow<AppUpdateUiState> = mutableState.asStateFlow()
     private val mutableManualChecking = MutableStateFlow(false)
@@ -66,12 +62,16 @@ class AppUpdateViewModel @Inject constructor(
     internal val acceleratorAvailability: StateFlow<Map<String, AcceleratorAvailability>> =
         mutableAcceleratorAvailability.asStateFlow()
     private var acceleratorCheckJob: Job? = null
+    private var downloadMonitorJob: Job? = null
 
     init {
         viewModelScope.launch { resumeDownloadOrCheck() }
     }
 
     internal fun dismiss() {
+        if (mutableState.value is AppUpdateUiState.Failed) {
+            viewModelScope.launch(Dispatchers.IO) { UpdateDownloadStore.clear(context) }
+        }
         mutableState.value = AppUpdateUiState.Hidden
     }
 
@@ -87,10 +87,18 @@ class AppUpdateViewModel @Inject constructor(
             runCatching {
                 val accelerators = updateSettings.snapshot().githubAccelerators
                 val urls = githubUrlCandidates(asset.downloadUrl, accelerators)
-                withContext(Dispatchers.IO) { enqueue(release, urls, 0) }
-            }.onSuccess { pending ->
-                savePending(pending)
-                monitor(pending)
+                require(urls.all { url ->
+                    val parsed = url.toHttpUrlOrNull()
+                    parsed != null && parsed.isHttps
+                }) { "Release APK 下载地址无效" }
+                val destination = UpdateInstaller.destinationFile(context, asset.name)
+                val record = UpdateDownloadRecord.create(destination, release, urls)
+                withContext(Dispatchers.IO) { UpdateDownloadStore.write(context, record) }
+                record
+            }.onSuccess { record ->
+                mutableState.value = record.toDownloadingState()
+                UpdateDownloadService.start(context)
+                monitorDownload(record)
             }.onFailure { error ->
                 mutableState.value = AppUpdateUiState.Failed(
                     release,
@@ -101,14 +109,24 @@ class AppUpdateViewModel @Inject constructor(
     }
 
     internal fun cancelDownload() {
-        val pending = readPending() ?: run {
+        val record = UpdateDownloadStore.read(context) ?: run {
             mutableState.value = AppUpdateUiState.Hidden
             return
         }
-        downloadManager.remove(pending.downloadId)
-        File(pending.destinationPath).delete()
-        clearPending()
-        mutableState.value = AppUpdateUiState.Available(pending.toRelease())
+        downloadMonitorJob?.cancel()
+        mutableState.value = AppUpdateUiState.Available(record.toRelease())
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                UpdateDownloadStore.write(
+                    context,
+                    record.copy(
+                        status = UpdateDownloadStatus.Cancelled,
+                        speedBytesPerSecond = 0L,
+                    ),
+                )
+            }
+            UpdateDownloadService.cancel(context)
+        }
     }
 
     internal fun retry(release: AppRelease) {
@@ -142,11 +160,35 @@ class AppUpdateViewModel @Inject constructor(
     }
 
     private suspend fun resumeDownloadOrCheck() {
-        val pending = readPending()
-        if (pending != null) {
-            monitor(pending)
-        } else {
-            checkLatestInternal(manual = false)
+        val record = withContext(Dispatchers.IO) { UpdateDownloadStore.read(context) }
+        when (record?.status) {
+            UpdateDownloadStatus.Queued,
+            UpdateDownloadStatus.Downloading,
+            -> {
+                mutableState.value = record.toDownloadingState()
+                UpdateDownloadService.start(context)
+                monitorDownload(record)
+            }
+            UpdateDownloadStatus.Ready -> {
+                val apk = record.toVerifiedApk()?.takeIf { File(it.path).isFile }
+                if (apk != null) {
+                    mutableState.value = AppUpdateUiState.Ready(record.toRelease(), apk)
+                } else {
+                    withContext(Dispatchers.IO) { UpdateDownloadStore.clear(context) }
+                    checkLatestInternal(manual = false)
+                }
+            }
+            UpdateDownloadStatus.Failed -> {
+                mutableState.value = AppUpdateUiState.Failed(
+                    record.toRelease(),
+                    record.errorMessage ?: "下载失败",
+                )
+            }
+            UpdateDownloadStatus.Cancelled -> {
+                withContext(Dispatchers.IO) { UpdateDownloadStore.clear(context) }
+                checkLatestInternal(manual = false)
+            }
+            null -> checkLatestInternal(manual = false)
         }
     }
 
@@ -167,8 +209,8 @@ class AppUpdateViewModel @Inject constructor(
                 val current = SemanticVersion.parse(BuildConfig.VERSION_NAME)
                 if (release != null && current != null && release.version > current) {
                     mutableState.value = AppUpdateUiState.Available(release)
-                } else {
-                    if (manual) mutableManualResults.tryEmit(ManualUpdateCheckResult.UpToDate)
+                } else if (manual) {
+                    mutableManualResults.tryEmit(ManualUpdateCheckResult.UpToDate)
                 }
             }
             .onFailure { error ->
@@ -181,210 +223,56 @@ class AppUpdateViewModel @Inject constructor(
         if (manual) mutableManualChecking.value = false
     }
 
-    private fun enqueue(release: AppRelease, urls: List<String>, urlIndex: Int): PendingDownload {
-        val downloadUri = Uri.parse(urls[urlIndex])
-        require(downloadUri.scheme == "https" && !downloadUri.host.isNullOrBlank()) {
-            "Release APK 下载地址无效"
-        }
-        val asset = requireNotNull(release.asset)
-        val destination = UpdateInstaller.destinationFile(context, asset.name)
-        if (destination.exists() && !destination.delete()) {
-            throw IllegalStateException("无法替换旧的更新安装包")
-        }
-
-        val request = DownloadManager.Request(downloadUri)
-            .setTitle("Cithub ${release.version}")
-            .setDescription("正在下载与当前版本匹配的更新安装包")
-            .setMimeType(ApkMimeType)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(true)
-            .setDestinationInExternalFilesDir(
-                context,
-                Environment.DIRECTORY_DOWNLOADS,
-                "updates/${destination.name}",
-            )
-        val id = downloadManager.enqueue(request)
-        return PendingDownload.from(id, destination, release, urls, urlIndex)
-    }
-
-    private suspend fun monitor(initial: PendingDownload) {
-        var pending = initial
-        var release = pending.toRelease()
-        mutableState.value = AppUpdateUiState.Downloading(release, null)
-
-        while (viewModelScope.isActive) {
-            when (val snapshot = downloadSnapshot(pending.downloadId)) {
-                null -> {
-                    val fallback = fallbackDownload(pending)
-                    if (fallback != null) {
-                        pending = fallback
-                        release = pending.toRelease()
-                        savePending(pending)
-                        mutableState.value = AppUpdateUiState.Downloading(release, null)
-                    } else {
-                        clearPending()
-                        mutableState.value = AppUpdateUiState.Failed(release, "下载失败")
-                        return
-                    }
+    private fun monitorDownload(initial: UpdateDownloadRecord) {
+        downloadMonitorJob?.cancel()
+        downloadMonitorJob = viewModelScope.launch {
+            var release = initial.toRelease()
+            while (true) {
+                val record = withContext(Dispatchers.IO) { UpdateDownloadStore.read(context) }
+                if (record == null) {
+                    mutableState.value = AppUpdateUiState.Available(release)
+                    return@launch
                 }
-                is DownloadSnapshot.InProgress -> {
-                    mutableState.value = AppUpdateUiState.Downloading(release, snapshot.progress)
-                }
-                DownloadSnapshot.Failed -> {
-                    val fallback = fallbackDownload(pending)
-                    if (fallback != null) {
-                        pending = fallback
-                        release = pending.toRelease()
-                        savePending(pending)
-                        mutableState.value = AppUpdateUiState.Downloading(release, null)
-                    } else {
-                        clearPending()
-                        mutableState.value = AppUpdateUiState.Failed(release, "下载失败")
-                        return
-                    }
-                }
-                DownloadSnapshot.Complete -> {
-                    val verified = runCatching {
-                        withContext(Dispatchers.IO) {
-                            UpdateInstaller.verify(context, File(pending.destinationPath), release, flavor)
+                release = record.toRelease()
+                when (record.status) {
+                    UpdateDownloadStatus.Queued,
+                    UpdateDownloadStatus.Downloading,
+                    -> mutableState.value = record.toDownloadingState()
+                    UpdateDownloadStatus.Ready -> {
+                        val apk = record.toVerifiedApk()
+                        if (apk != null && File(apk.path).isFile) {
+                            mutableState.value = AppUpdateUiState.Ready(release, apk)
+                        } else {
+                            mutableState.value = AppUpdateUiState.Failed(release, "下载的安装包不存在")
                         }
+                        return@launch
                     }
-                    val apk = verified.getOrNull()
-                    if (apk != null) {
-                        mutableState.value = AppUpdateUiState.Ready(release, apk)
-                        return
-                    }
-
-                    val fallback = fallbackDownload(pending)
-                    if (fallback != null) {
-                        pending = fallback
-                        release = pending.toRelease()
-                        savePending(pending)
-                        mutableState.value = AppUpdateUiState.Downloading(release, null)
-                    } else {
-                        val error = verified.exceptionOrNull()
-                        clearPending()
-                        File(pending.destinationPath).delete()
+                    UpdateDownloadStatus.Failed -> {
                         mutableState.value = AppUpdateUiState.Failed(
                             release,
-                            error?.message ?: "安装包安全校验失败",
+                            record.errorMessage ?: "下载失败",
                         )
-                        return
+                        return@launch
+                    }
+                    UpdateDownloadStatus.Cancelled -> {
+                        mutableState.value = AppUpdateUiState.Available(release)
+                        return@launch
                     }
                 }
-            }
-            delay(750)
-        }
-    }
-
-    private suspend fun fallbackDownload(pending: PendingDownload): PendingDownload? = withContext(Dispatchers.IO) {
-        runCatching {
-            downloadManager.remove(pending.downloadId)
-            File(pending.destinationPath).delete()
-            val nextIndex = pending.urlIndex + 1
-            if (nextIndex >= pending.downloadUrls.size) return@runCatching null
-            enqueue(pending.toRelease(), pending.downloadUrls, nextIndex)
-        }.getOrNull()
-    }
-
-    private suspend fun downloadSnapshot(id: Long): DownloadSnapshot? = withContext(Dispatchers.IO) {
-        val query = DownloadManager.Query().setFilterById(id)
-        downloadManager.query(query).use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            when (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                DownloadManager.STATUS_SUCCESSFUL -> DownloadSnapshot.Complete
-                DownloadManager.STATUS_FAILED -> DownloadSnapshot.Failed
-                else -> {
-                    val downloaded = cursor.getLong(
-                        cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
-                    )
-                    val total = cursor.getLong(
-                        cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
-                    )
-                    DownloadSnapshot.InProgress(
-                        progress = if (total > 0L) (downloaded.toFloat() / total).coerceIn(0f, 1f) else null,
-                    )
-                }
+                delay(500L)
             }
         }
-    }
-
-    private fun savePending(pending: PendingDownload) {
-        preferences.edit().putString(PendingKey, json.encodeToString(pending)).apply()
-    }
-
-    private fun readPending(): PendingDownload? = preferences.getString(PendingKey, null)
-        ?.let { encoded -> runCatching { json.decodeFromString<PendingDownload>(encoded) }.getOrNull() }
-        ?.takeIf { SemanticVersion.parse(it.version) != null }
-
-    private fun clearPending() {
-        preferences.edit().remove(PendingKey).apply()
-    }
-
-    private sealed interface DownloadSnapshot {
-        data class InProgress(val progress: Float?) : DownloadSnapshot
-        data object Failed : DownloadSnapshot
-        data object Complete : DownloadSnapshot
-    }
-
-    @Serializable
-    private data class PendingDownload(
-        val downloadId: Long,
-        val destinationPath: String,
-        val version: String,
-        val tagName: String,
-        val title: String,
-        val notes: String,
-        val pageUrl: String,
-        val assetName: String,
-        val assetSize: Long,
-        val assetUrl: String,
-        val prerelease: Boolean,
-        val downloadUrls: List<String>,
-        val urlIndex: Int,
-    ) {
-        fun toRelease(): AppRelease = AppRelease(
-            version = requireNotNull(SemanticVersion.parse(version)),
-            tagName = tagName,
-            title = title,
-            notes = notes,
-            pageUrl = pageUrl,
-            asset = UpdateAsset(assetName, assetSize, assetUrl),
-            prerelease = prerelease,
-        )
-
-        companion object {
-            fun from(
-                id: Long,
-                destination: File,
-                release: AppRelease,
-                downloadUrls: List<String>,
-                urlIndex: Int,
-            ): PendingDownload {
-                val asset = requireNotNull(release.asset)
-                return PendingDownload(
-                    downloadId = id,
-                    destinationPath = destination.absolutePath,
-                    version = release.version.toString(),
-                    tagName = release.tagName,
-                    title = release.title,
-                    notes = release.notes,
-                    pageUrl = release.pageUrl,
-                    assetName = asset.name,
-                    assetSize = asset.size,
-                    assetUrl = asset.downloadUrl,
-                    prerelease = release.prerelease,
-                    downloadUrls = downloadUrls,
-                    urlIndex = urlIndex,
-                )
-            }
-        }
-    }
-
-    companion object {
-        private const val PreferencesName = "app_update_download"
-        private const val PendingKey = "pending_download"
-        private const val ApkMimeType = "application/vnd.android.package-archive"
     }
 }
+
+private fun UpdateDownloadRecord.toDownloadingState(): AppUpdateUiState.Downloading =
+    AppUpdateUiState.Downloading(
+        release = toRelease(),
+        progress = if (assetSize > 0L) {
+            (downloadedBytes.toFloat() / assetSize).coerceIn(0f, 1f)
+        } else {
+            null
+        },
+        speedBytesPerSecond = speedBytesPerSecond,
+        connections = connections,
+    )
