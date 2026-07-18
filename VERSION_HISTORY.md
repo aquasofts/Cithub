@@ -5,11 +5,15 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.28`
-- Version code: `34`
+- Version name: `2.1.29`
+- Version code: `35`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.29 (versionCode 35) — 2026-07-18
+
+- Refreshed the installable Performance APKs from the current Navigation 3 and Tieba image-saving source state.
 
 ### 2.1.28 (versionCode 34) — 2026-07-18
 
