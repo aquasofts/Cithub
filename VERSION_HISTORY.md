@@ -5,15 +5,21 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.30`
-- Version code: `36`
+- Version name: `2.1.31`
+- Version code: `37`
 - Updated: 2026-07-18
 
 ## Changes
 
+### 2.1.31 (versionCode 37) — 2026-07-18
+
+- Added horizontal paging for multiple images posted in the same Tieba floor, both inline and in the original-image viewer.
+- Replaced Tieba image-save confirmations with a long-press context menu containing only “保存图片”, available before and after opening an image.
+- Disabled pinch-to-zoom for news article pages while adding tap-to-open image zoom and the same long-press image-save menu in article and full-image views.
+
 ### 2.1.30 (versionCode 36) — 2026-07-18
 
-- Fixed the GitHub Actions release pipeline so version tags build the signed Full and Lite APKs and publish them automatically as a verified pre-release with SHA-256 checksums.
+- Changed GitHub Actions to rebuild the latest `main` source on every push and replace the rolling Full/Lite Performance pre-release APKs with verified files and SHA-256 checksums, without requiring a version tag or signing Secrets.
 
 ### 2.1.29 (versionCode 35) — 2026-07-18
 

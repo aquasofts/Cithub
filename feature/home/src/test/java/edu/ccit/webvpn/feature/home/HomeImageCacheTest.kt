@@ -37,9 +37,17 @@ class HomeImageCacheTest {
     fun `article wrapper reserves image geometry and animates reveal`() {
         val html = articleHtmlDocument("<img src='https://cdn.example/a.jpg' width='800' height='600'>")
 
+        assertTrue(html.contains("maximum-scale=1, user-scalable=no"))
         assertTrue(html.contains("--article-image-ratio:800/600"))
         assertTrue(html.contains("animation: image-shimmer"))
         assertTrue(html.contains("requestAnimationFrame"))
         assertTrue(html.contains("class=\"article-image is-loading\""))
+    }
+
+    @Test
+    fun `saved image extension prefers mime and normalizes jpeg`() {
+        assertEquals("png", homeImageExtension("image/png; charset=binary", "https://cdn.example/a.jpg"))
+        assertEquals("jpg", homeImageExtension("image/jpeg", "https://cdn.example/a"))
+        assertEquals("webp", homeImageExtension(null, "https://cdn.example/a.webp?sign=1"))
     }
 }

@@ -57,6 +57,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.shape.CircleShape
@@ -119,6 +121,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -227,7 +230,6 @@ private val TiebaWindowInsets = WindowInsets(0, 0, 0, 0)
 
 /** Mirrors TiebaLite's photo-view handoff: the viewer receives the original URL, never the preview URL. */
 private data class PhotoViewData(
-    val data: LoadPicPageData? = null,
     val picItems: List<PicItem>,
     val index: Int = 0,
 )
@@ -237,6 +239,7 @@ private data class PicItem(
     val picIndex: Int,
     val originUrl: String,
     val postId: Long? = null,
+    val loadData: LoadPicPageData? = null,
 )
 
 private class ForumScreenState {
@@ -1625,79 +1628,156 @@ private fun TiebaContentBody(
     val blocks = remember(effectiveContent) {
         buildList<List<TiebaContent>> {
             var text = mutableListOf<TiebaContent>()
+            var images = mutableListOf<TiebaContent>()
             fun flushText() {
                 if (text.isNotEmpty()) {
                     add(text)
                     text = mutableListOf()
                 }
             }
+            fun flushImages() {
+                if (images.isNotEmpty()) {
+                    add(images)
+                    images = mutableListOf()
+                }
+            }
             effectiveContent.forEach { item ->
                 when (item) {
-                    is TiebaContent.Image, is TiebaContent.Video -> {
+                    is TiebaContent.Image -> {
                         flushText()
+                        images += item
+                    }
+                    is TiebaContent.Video -> {
+                        flushText()
+                        flushImages()
                         add(listOf(item))
                     }
-                    else -> text += item
+                    else -> {
+                        flushImages()
+                        text += item
+                    }
                 }
             }
             flushText()
+            flushImages()
         }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
-            when (val media = block.singleOrNull()) {
-                is TiebaContent.Image -> {
-                    val ratio = if (media.width != null && media.height != null && media.height > 0) {
-                        (media.width.toFloat() / media.height).coerceIn(0.65f, 2.2f)
-                    } else {
-                        4f / 3f
+            val images = block.filterIsInstance<TiebaContent.Image>()
+            if (images.size == block.size && images.isNotEmpty()) {
+                TiebaImageCarousel(
+                    images = images,
+                    threadId = threadId,
+                    postId = postId,
+                    forumId = forumId,
+                    forumName = forumName,
+                    seeLz = seeLz,
+                    onImage = onImage,
+                )
+            } else {
+                when (val media = block.singleOrNull()) {
+                    is TiebaContent.Video -> VideoPlayer(media.url)
+                    else -> {
+                        val textModifier = if (onLongPress == null) {
+                            Modifier.fillMaxWidth()
+                        } else {
+                            Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = onLongPress)
+                        }
+                        RichTiebaText(block, textModifier)
                     }
-                    TiebaAsyncImage(
-                        url = media.previewUrl,
-                        contentDescription = "帖子图片",
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp, max = 520.dp)
-                            .aspectRatio(ratio).clip(MaterialTheme.shapes.small),
-                        contentScale = ContentScale.Fit,
-                        onClick = {
-                            onImage(
-                                PhotoViewData(
-                                    data = LoadPicPageData(
-                                        forumId = forumId,
-                                        forumName = forumName,
-                                        seeLz = seeLz,
-                                        objType = "pb",
-                                        picId = media.picId.ifBlank {
-                                            media.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
-                                        },
-                                        picIndex = 1,
-                                        threadId = threadId,
-                                        postId = postId,
-                                        originUrl = media.originalUrl,
-                                    ),
-                                    picItems = listOf(
-                                        PicItem(
-                                            picId = media.picId.ifBlank {
-                                                media.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
-                                            },
-                                            picIndex = 1,
-                                            originUrl = media.originalUrl,
-                                            postId = postId,
-                                        ),
-                                    ),
-                                ),
-                            )
-                        },
-                    )
                 }
-                is TiebaContent.Video -> VideoPlayer(media.url)
-                else -> {
-                    val textModifier = if (onLongPress == null) {
-                        Modifier.fillMaxWidth()
-                    } else {
-                        Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = onLongPress)
-                    }
-                    RichTiebaText(block, textModifier)
-                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TiebaImageCarousel(
+    images: List<TiebaContent.Image>,
+    threadId: Long,
+    postId: Long,
+    forumId: Long,
+    forumName: String,
+    seeLz: Boolean,
+    onImage: (PhotoViewData) -> Unit,
+) {
+    val context = LocalContext.current
+    val runtime = remember(context) { TiebaRuntime.get(context) }
+    val picItems = remember(images, threadId, postId, forumId, forumName, seeLz) {
+        images.mapIndexed { index, image ->
+            val picId = image.picId.ifBlank {
+                image.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
+            }
+            val picIndex = index + 1
+            PicItem(
+                picId = picId,
+                picIndex = picIndex,
+                originUrl = image.originalUrl,
+                postId = postId,
+                loadData = LoadPicPageData(
+                    forumId = forumId,
+                    forumName = forumName,
+                    seeLz = seeLz,
+                    objType = "pb",
+                    picId = picId,
+                    picIndex = picIndex,
+                    threadId = threadId,
+                    postId = postId,
+                    originUrl = image.originalUrl,
+                ),
+            )
+        }
+    }
+    val pagerState = rememberPagerState(pageCount = { images.size })
+    val currentImage = images[pagerState.currentPage.coerceIn(images.indices)]
+    val ratio = if (currentImage.width != null && currentImage.height != null && currentImage.height > 0) {
+        (currentImage.width.toFloat() / currentImage.height).coerceIn(0.65f, 2.2f)
+    } else {
+        4f / 3f
+    }
+    Box(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 96.dp, max = 520.dp)
+            .aspectRatio(ratio)
+            .clip(MaterialTheme.shapes.small),
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize().clipToBounds(),
+            key = { page -> "${picItems[page].picId}:$page" },
+            beyondViewportPageCount = 1,
+        ) { page ->
+            val item = picItems[page]
+            val photoData = PhotoViewData(picItems = picItems, index = page)
+            val saveAction = rememberTiebaImageSaveAction(runtime, item)
+            ImageSaveContextMenu(
+                modifier = Modifier.fillMaxSize(),
+                onClick = { onImage(photoData) },
+                onSave = saveAction.save,
+                saveEnabled = !saveAction.saving,
+            ) {
+                TiebaAsyncImage(
+                    url = images[page].previewUrl,
+                    contentDescription = "帖子图片 ${page + 1}/${images.size}",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+        }
+        if (images.size > 1) {
+            Surface(
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                color = Color(0x99000000),
+                contentColor = Color.White,
+                shape = MaterialTheme.shapes.extraSmall,
+            ) {
+                Text(
+                    "${pagerState.currentPage + 1}/${images.size}",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                )
             }
         }
     }
@@ -1751,6 +1831,117 @@ private fun RichTiebaText(
         overflow = if (maxLines == Int.MAX_VALUE) TextOverflow.Clip else TextOverflow.Ellipsis,
         style = style,
     )
+}
+
+private data class TiebaImageSaveAction(
+    val saving: Boolean,
+    val save: () -> Unit,
+)
+
+@Composable
+private fun rememberTiebaImageSaveAction(
+    runtime: TiebaRuntime,
+    item: PicItem,
+    resolvedUrl: String? = null,
+): TiebaImageSaveAction {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var saving by remember(item.picId) { mutableStateOf(false) }
+    val startSaving: () -> Unit = {
+        if (!saving) {
+            scope.launch {
+                saving = true
+                runCatching {
+                    val url = resolvedUrl ?: resolveTiebaImageUrl(runtime, item)
+                    saveTiebaImage(context, runtime, url, item.picId)
+                }.onSuccess { path ->
+                    Toast.makeText(context, "已保存到 $path", Toast.LENGTH_LONG).show()
+                }.onFailure { error ->
+                    Toast.makeText(context, error.message ?: "图片保存失败", Toast.LENGTH_LONG).show()
+                }
+                saving = false
+            }
+        }
+    }
+    val legacyStoragePermission = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        if (granted) {
+            startSaving()
+        } else {
+            Toast.makeText(context, "未获得存储权限，无法保存图片", Toast.LENGTH_SHORT).show()
+        }
+    }
+    return TiebaImageSaveAction(
+        saving = saving,
+        save = {
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                ) == PackageManager.PERMISSION_GRANTED
+            ) {
+                startSaving()
+            } else {
+                legacyStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        },
+    )
+}
+
+private suspend fun resolveTiebaImageUrl(runtime: TiebaRuntime, item: PicItem): String {
+    val refreshed = item.loadData?.let { requestData ->
+        runCatching { runtime.network.resolveOriginalImage(requestData, runtime.accountDao.get()) }.getOrNull()
+    }
+    return refreshed?.takeIf(::isAuthorizedTiebaImageUrl)
+        ?: item.originUrl.takeIf(::isAuthorizedTiebaImageUrl)
+        ?: error("无法获取真实原图")
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ImageSaveContextMenu(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onSave: () -> Unit,
+    saveEnabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    var expanded by remember { mutableStateOf(false) }
+    var pressOffset by remember { mutableStateOf(IntOffset.Zero) }
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.filterIsInstance<PressInteraction.Press>().collect { press ->
+            pressOffset = press.pressPosition.round()
+        }
+    }
+    Box(
+        modifier = modifier.combinedClickable(
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = onClick,
+            onLongClickLabel = "图片操作",
+            onLongClick = { if (saveEnabled) expanded = true },
+        ),
+    ) {
+        content()
+        Box(Modifier.offset { pressOffset }) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                containerColor = MaterialTheme.colorScheme.background,
+                shape = MaterialTheme.shapes.small,
+                shadowElevation = 7.dp,
+            ) {
+                DropdownMenuItem(
+                    text = { Text("保存图片") },
+                    onClick = {
+                        expanded = false
+                        onSave()
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -2185,7 +2376,57 @@ private fun UserForumList(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: () -> Unit) {
-    val item = data.picItems.getOrNull(data.index.coerceIn(data.picItems.indices)) ?: return
+    if (data.picItems.isEmpty()) return
+    val initialPage = data.index.coerceIn(data.picItems.indices)
+    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { data.picItems.size })
+    val dimensions = remember(data.picItems) { mutableStateMapOf<Int, Pair<Int, Int>>() }
+    val pageScales = remember(data.picItems) { mutableStateMapOf<Int, Float>() }
+    val currentPage = pagerState.currentPage.coerceIn(data.picItems.indices)
+    val currentDimensions = dimensions[currentPage]
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize().clipToBounds(),
+            key = { page -> "${data.picItems[page].picId}:$page" },
+            beyondViewportPageCount = 1,
+            userScrollEnabled = (pageScales[currentPage] ?: 1f) <= 1.01f,
+        ) { page ->
+            FullImagePage(
+                runtime = runtime,
+                item = data.picItems[page],
+                onDimensions = { size -> dimensions[page] = size },
+                onScaleChange = { scale -> pageScales[page] = scale },
+            )
+        }
+        Row(
+            Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x66000000)).padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
+            }
+            Text(
+                buildString {
+                    append("原图")
+                    if (data.picItems.size > 1) append(" · ${currentPage + 1}/${data.picItems.size}")
+                    currentDimensions?.let { (width, height) -> append(" · $width × $height") }
+                },
+                modifier = Modifier.weight(1f),
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FullImagePage(
+    runtime: TiebaRuntime,
+    item: PicItem,
+    onDimensions: (Pair<Int, Int>) -> Unit,
+    onScaleChange: (Float) -> Unit,
+) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
@@ -2194,45 +2435,12 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
     var resolving by remember(item.picId, retry) { mutableStateOf(true) }
     var loading by remember(item.picId, retry) { mutableStateOf(false) }
     var failed by remember(item.picId, retry) { mutableStateOf(false) }
-    var dimensions by remember(item.picId, retry) { mutableStateOf<Pair<Int, Int>?>(null) }
-    var showSaveDialog by remember(item.picId) { mutableStateOf(false) }
-    var saving by remember(item.picId) { mutableStateOf(false) }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val saveResolvedImage: (String) -> Unit = { url ->
-        if (!saving) {
-            scope.launch {
-                saving = true
-                runCatching { saveTiebaImage(context, runtime, url, item.picId) }
-                    .onSuccess { path -> Toast.makeText(context, "已保存到 $path", Toast.LENGTH_LONG).show() }
-                    .onFailure { error ->
-                        Toast.makeText(context, error.message ?: "图片保存失败", Toast.LENGTH_LONG).show()
-                    }
-                saving = false
-            }
-        }
-    }
-    val legacyStoragePermission = rememberLauncherForActivityResult(RequestPermission()) { granted ->
-        if (granted) {
-            resolvedUrl?.let(saveResolvedImage)
-        } else {
-            Toast.makeText(context, "未获得存储权限，无法保存图片", Toast.LENGTH_SHORT).show()
-        }
-    }
-    LaunchedEffect(data.data, item.picId, retry) {
+    LaunchedEffect(item.picId, retry) {
         resolving = true
         loading = false
         failed = false
-        dimensions = null
-        val refreshed = data.data?.let { requestData ->
-            runCatching { runtime.network.resolveOriginalImage(requestData, runtime.accountDao.get()) }
-                .getOrNull()
-        }
-        // Never fall back to a protobuf preview when picpage metadata is available: it may be
-        // resized. Also reject unsigned item URLs because Baidu serves the 238 x 238 Tieba-logo
-        // placeholder with HTTP 200 for those URLs.
-        resolvedUrl = refreshed?.takeIf(::isAuthorizedTiebaImageUrl)
-            ?: item.originUrl.takeIf { data.data == null && isAuthorizedTiebaImageUrl(it) }
+        resolvedUrl = runCatching { resolveTiebaImageUrl(runtime, item) }.getOrNull()
         resolving = false
         if (resolvedUrl == null) failed = true
     }
@@ -2250,8 +2458,10 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
                 .build()
         }
     }
+    val saveAction = rememberTiebaImageSaveAction(runtime, item, resolvedUrl)
     val transform = rememberTransformableState { _, zoom, pan, _ ->
         scale = (scale * zoom).coerceIn(1f, 6f)
+        onScaleChange(scale)
         if (scale == 1f) {
             offsetX = 0f
             offsetY = 0f
@@ -2260,38 +2470,39 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
             offsetY += pan.y
         }
     }
-    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         request?.let { originalRequest ->
-            AsyncImage(
-                model = originalRequest,
-                contentDescription = "原图",
+            ImageSaveContextMenu(
                 modifier = Modifier.fillMaxSize().graphicsLayer {
                     scaleX = scale
                     scaleY = scale
                     translationX = offsetX
                     translationY = offsetY
-                }.combinedClickable(
-                    onClick = {},
-                    onLongClickLabel = "保存图片",
-                    onLongClick = {
-                        if (resolvedUrl != null && !failed && !saving) showSaveDialog = true
+                }.transformable(transform),
+                onClick = {},
+                onSave = saveAction.save,
+                saveEnabled = resolvedUrl != null && !failed && !saveAction.saving,
+            ) {
+                AsyncImage(
+                    model = originalRequest,
+                    contentDescription = "原图",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                    onLoading = {
+                        loading = true
+                        failed = false
                     },
-                ).transformable(transform),
-                contentScale = ContentScale.Fit,
-                onLoading = {
-                    loading = true
-                    failed = false
-                },
-                onSuccess = { result ->
-                    loading = false
-                    failed = false
-                    dimensions = result.result.image.width to result.result.image.height
-                },
-                onError = {
-                    loading = false
-                    failed = true
-                },
-            )
+                    onSuccess = { result ->
+                        loading = false
+                        failed = false
+                        onDimensions(result.result.image.width to result.result.image.height)
+                    },
+                    onError = {
+                        loading = false
+                        failed = true
+                    },
+                )
+            }
         }
         if (resolving || loading) {
             CircularProgressIndicator(color = Color.White)
@@ -2318,57 +2529,13 @@ private fun FullImageScreen(runtime: TiebaRuntime, data: PhotoViewData, onBack: 
                 }
             }
         }
-        Row(
-            Modifier.align(Alignment.TopStart).fillMaxWidth().background(Color(0x66000000)).padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
-            }
-            Text(
-                dimensions?.let { (width, height) -> "原图 · ${width} × ${height}" }
-                    ?: if (resolving) "正在获取真实原图…" else "正在加载原图…",
-                modifier = Modifier.weight(1f),
+        if (saveAction.saving) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 64.dp, end = 16.dp).size(24.dp),
                 color = Color.White,
-                style = MaterialTheme.typography.titleSmall,
+                strokeWidth = 2.dp,
             )
-            if (saving) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    color = Color.White,
-                    strokeWidth = 2.dp,
-                )
-            }
         }
-    }
-    if (showSaveDialog) {
-        AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
-            title = { Text("保存图片") },
-            text = { Text("将真实原图保存到系统相册的 CCIT Academic 文件夹？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showSaveDialog = false
-                        val url = resolvedUrl ?: return@TextButton
-                        if (
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
-                            ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
-                            saveResolvedImage(url)
-                        } else {
-                            legacyStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                        }
-                    },
-                ) { Text("保存") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSaveDialog = false }) { Text("取消") }
-            },
-        )
     }
 }
 
