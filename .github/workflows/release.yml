@@ -132,7 +132,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish rolling GitHub pre-release
+      - name: Recreate rolling GitHub pre-release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,24 +157,34 @@ jobs:
 
           release_notes="Automatically built from the latest main-branch commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
 
-          if gh release view "$PRERELEASE_TAG" >/dev/null 2>&1; then
-            release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$PRERELEASE_TAG" --jq '.id')"
+          gh api \
+            --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.prerelease == true) | .id' |
+            while IFS= read -r release_id; do
+              [[ -z "$release_id" ]] && continue
+              gh api \
+                --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                >/dev/null
+            done
+
+          gh release create "$PRERELEASE_TAG" \
+            prerelease/*.apk \
+            prerelease/SHA256SUMS.txt \
+            --verify-tag \
+            --prerelease \
+            --title "Cithub Pre-release" \
+            --notes "$release_notes"
+
+          prerelease_count="$(
             gh api \
-              --method PATCH \
-              "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              -f name="Cithub Pre-release" \
-              -f body="$release_notes" \
-              -F draft=false \
-              -F prerelease=true \
-              -f make_latest=false \
-              >/dev/null
-            gh release upload "$PRERELEASE_TAG" prerelease/*.apk prerelease/SHA256SUMS.txt --clobber
-          else
-            gh release create "$PRERELEASE_TAG" \
-              prerelease/*.apk \
-              prerelease/SHA256SUMS.txt \
-              --verify-tag \
-              --prerelease \
-              --title "Cithub Pre-release" \
-              --notes "$release_notes"
+              --paginate \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.prerelease == true) | .id' |
+              wc -l
+          )"
+          if [[ "${prerelease_count//[[:space:]]/}" != "1" ]]; then
+            echo "Expected exactly one GitHub pre-release after publishing." >&2
+            exit 1
           fi

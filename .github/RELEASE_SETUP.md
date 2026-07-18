@@ -2,7 +2,7 @@
 
 The `Build and publish APKs` workflow always builds the latest `main` branch source. It does not require a version tag, manually entered version, or Android signing secrets.
 
-Every push to `main` automatically updates one rolling GitHub pre-release with the fixed tag `prerelease`.
+Every push to `main` automatically recreates one rolling GitHub pre-release with the fixed tag `prerelease`. Recreating it refreshes its publication time, so the completed pre-release appears at the top of the Releases list.
 
 The pre-release always contains the newest files:
 
@@ -10,7 +10,7 @@ The pre-release always contains the newest files:
 - `Lite-Cithub-PreRelease.apk`
 - `SHA256SUMS.txt`
 
-Older APK assets with these names are replaced instead of creating a new release for every commit. The `prerelease` tag is moved to the exact commit used for the build, and the release description links to that commit.
+After a successful build, the workflow deletes every existing GitHub pre-release entry and creates exactly one new pre-release. The `prerelease` tag is moved to the exact commit used for the build, and the release description links to that commit. Stable releases are not removed.
 
 ## Required GitHub setting
 
