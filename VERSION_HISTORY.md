@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.3`
-- Version code: `46`
-- Updated: 2026-07-18
+- Version name: `2.2.4`
+- Version code: `47`
+- Updated: 2026-07-19
 
 ## Changes
+
+### 2.2.4 (versionCode 47) — 2026-07-19
+
+- Removed the Gopeed Core dependency, segmented multi-connection downloader, connection-count setting, and connection fallback state.
+- Replaced update and custom APK downloads with one sequential HTTPS stream while preserving foreground-service background operation, ordered route fallback, progress/cancellation notifications, and package security verification.
 
 ### 2.2.3 (versionCode 46) — 2026-07-18
 
