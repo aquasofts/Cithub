@@ -49,6 +49,19 @@ class UpdateDownloadStoreTest {
         assertEquals(1, nextRoute.activeConnections)
     }
 
+    @Test
+    fun completedPayloadFailureSkipsSameRouteSingleConnectionRetry() {
+        val nextRoute = requireNotNull(
+            record(connections = 16).nextDownloadAttempt(
+                retrySameRouteWithSingleConnection = false,
+            ),
+        )
+
+        assertEquals(1, nextRoute.urlIndex)
+        assertFalse(nextRoute.singleConnectionFallback)
+        assertEquals(16, nextRoute.activeConnections)
+    }
+
     private fun record(
         connections: Int,
         urlIndex: Int = 0,

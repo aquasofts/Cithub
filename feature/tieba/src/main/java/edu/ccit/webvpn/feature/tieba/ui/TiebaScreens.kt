@@ -1246,26 +1246,13 @@ private fun FloorHeader(
                 color = CcitColors.InkMuted,
             )
         }
-        if (floor.isTopAgree || isOriginalPost) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (floor.isTopAgree) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                        shape = MaterialTheme.shapes.extraSmall,
-                    ) {
-                        Text("高赞", Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                if (isOriginalPost) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        shape = MaterialTheme.shapes.extraSmall,
-                    ) {
-                        Text("楼主", Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
+        if (isOriginalPost) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                shape = MaterialTheme.shapes.extraSmall,
+            ) {
+                Text("楼主", Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall)
             }
         }
     }

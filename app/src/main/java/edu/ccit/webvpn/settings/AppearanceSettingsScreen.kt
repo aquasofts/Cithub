@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -437,6 +438,7 @@ private fun SettingsScaffold(
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = SettingsWindowInsets,
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
@@ -446,6 +448,7 @@ private fun SettingsScaffold(
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.action_back))
                     }
                 },
+                windowInsets = SettingsWindowInsets,
             )
         },
     ) { inner ->
@@ -459,6 +462,8 @@ private fun SettingsScaffold(
         )
     }
 }
+
+private val SettingsWindowInsets = WindowInsets(0, 0, 0, 0)
 
 private val SeedColors = listOf(
     0xFF4477E0.toInt(), 0xFF019C74.toInt(), 0xFFFD742D.toInt(), 0xFFE986A7.toInt(),

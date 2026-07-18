@@ -15,6 +15,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import edu.ccit.webvpn.BuildConfig
+import edu.ccit.webvpn.core.runtime.RuntimeLog
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -139,6 +140,9 @@ internal class UpdateDownloadService : Service() {
 
             val taskId = requireNotNull(record.gopeedTaskId)
             val task = runCatching { client.getTask(taskId) }.getOrElse { error ->
+                recoverCompletedDownload(client, record, taskId)?.let { ready ->
+                    return DownloadOutcome.Ready(ready)
+                }
                 record = failCurrentCandidate(client, record, error.message ?: "无法读取 Gopeed 下载任务")
                     ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
                 continue
@@ -159,39 +163,24 @@ internal class UpdateDownloadService : Service() {
                 }
                 "running", "wait" -> record = persistProgress(record, task)
                 "error" -> {
+                    recoverCompletedDownload(client, record, taskId)?.let { ready ->
+                        return DownloadOutcome.Ready(ready)
+                    }
                     record = failCurrentCandidate(client, record, "当前下载线路不可用")
                         ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
                     continue
                 }
                 "done" -> {
-                    val verified = runCatching {
-                        UpdateInstaller.verify(
-                            context = this,
-                            apk = File(record.destinationPath),
-                            release = record.toRelease(),
-                            flavor = updateFlavor(BuildConfig.FLAVOR),
-                            verifyReleaseVersion = !record.customDownload,
-                        )
-                    }
+                    val verified = verifyDownloadedPackage(record)
                     val apk = verified.getOrNull()
                     if (apk != null) {
-                        runCatching { client.deleteTask(taskId, force = false) }
-                        val ready = record.copy(
-                            status = UpdateDownloadStatus.Ready,
-                            version = apk.version.toString(),
-                            gopeedTaskId = null,
-                            downloadedBytes = File(record.destinationPath).length(),
-                            speedBytesPerSecond = 0L,
-                            verifiedVersionCode = apk.versionCode,
-                            errorMessage = null,
-                        )
-                        UpdateDownloadStore.write(this, ready)
-                        return DownloadOutcome.Ready(ready)
+                        return DownloadOutcome.Ready(markReady(client, record, taskId, apk))
                     }
                     record = failCurrentCandidate(
                         client,
                         record,
                         verified.exceptionOrNull()?.message ?: "安装包安全校验失败",
+                        retrySameRouteWithSingleConnection = false,
                     ) ?: return DownloadOutcome.Failed(requireNotNull(UpdateDownloadStore.read(this)))
                     continue
                 }
@@ -263,9 +252,21 @@ internal class UpdateDownloadService : Service() {
         client: GopeedUpdateClient,
         record: UpdateDownloadRecord,
         message: String,
+        retrySameRouteWithSingleConnection: Boolean = true,
     ): UpdateDownloadRecord? {
         deleteTaskAndFile(client, record)
-        record.nextDownloadAttempt()?.let { next ->
+        record.nextDownloadAttempt(retrySameRouteWithSingleConnection)?.let { next ->
+            RuntimeLog.get(this).warning(
+                source = "update_download",
+                event = "candidate_fallback",
+                fields = mapOf(
+                    "url_index" to record.urlIndex,
+                    "connections" to record.activeConnections,
+                    "next_url_index" to next.urlIndex,
+                    "next_connections" to next.activeConnections,
+                    "reason" to message,
+                ),
+            )
             return next.also {
                 UpdateDownloadStore.write(this, it)
                 updateForeground(it)
@@ -281,6 +282,64 @@ internal class UpdateDownloadService : Service() {
         )
         UpdateDownloadStore.write(this, failed)
         return null
+    }
+
+    private fun recoverCompletedDownload(
+        client: GopeedUpdateClient,
+        record: UpdateDownloadRecord,
+        taskId: String,
+    ): UpdateDownloadRecord? = verifyDownloadedPackage(record).getOrNull()?.let { apk ->
+        RuntimeLog.get(this).info(
+            source = "update_download",
+            event = "completed_file_recovered",
+            fields = mapOf(
+                "url_index" to record.urlIndex,
+                "connections" to record.activeConnections,
+                "downloaded_bytes" to File(record.destinationPath).length(),
+            ),
+        )
+        markReady(client, record, taskId, apk)
+    }
+
+    private fun verifyDownloadedPackage(record: UpdateDownloadRecord): Result<VerifiedUpdateApk> = runCatching {
+        UpdateInstaller.verify(
+            context = this,
+            apk = File(record.destinationPath),
+            release = record.toRelease(),
+            flavor = updateFlavor(BuildConfig.FLAVOR),
+            verifyReleaseVersion = !record.customDownload,
+        )
+    }
+
+    private fun markReady(
+        client: GopeedUpdateClient,
+        record: UpdateDownloadRecord,
+        taskId: String,
+        apk: VerifiedUpdateApk,
+    ): UpdateDownloadRecord {
+        runCatching { client.deleteTask(taskId, force = false) }
+        return record.copy(
+            status = UpdateDownloadStatus.Ready,
+            version = apk.version.toString(),
+            gopeedTaskId = null,
+            downloadedBytes = File(record.destinationPath).length(),
+            speedBytesPerSecond = 0L,
+            verifiedVersionCode = apk.versionCode,
+            errorMessage = null,
+        ).also { ready ->
+            UpdateDownloadStore.write(this, ready)
+            RuntimeLog.get(this).info(
+                source = "update_download",
+                event = "ready_to_install",
+                fields = mapOf(
+                    "version" to ready.version,
+                    "version_code" to ready.verifiedVersionCode,
+                    "url_index" to ready.urlIndex,
+                    "connections" to ready.activeConnections,
+                    "downloaded_bytes" to ready.downloadedBytes,
+                ),
+            )
+        }
     }
 
     private fun deleteTaskAndFile(client: GopeedUpdateClient, record: UpdateDownloadRecord) {
@@ -343,21 +402,14 @@ internal class UpdateDownloadService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun showReadyNotification(record: UpdateDownloadRecord) {
-        val apk = record.toVerifiedApk() ?: return
-        val installIntent = UpdateInstaller.installIntent(this, apk.path)
-        val installPendingIntent = PendingIntent.getActivity(
-            this,
-            InstallRequestCode,
-            installIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        if (record.toVerifiedApk() == null) return
         NotificationManagerCompat.from(this).notify(
             ResultNotificationId,
             NotificationCompat.Builder(this, NotificationChannelId)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentTitle("Cithub ${record.version} 已下载")
-                .setContentText("点按安装更新")
-                .setContentIntent(installPendingIntent)
+                .setContentText("点按打开应用并确认安装")
+                .setContentIntent(appPendingIntent())
                 .setAutoCancel(true)
                 .build(),
         )
@@ -421,7 +473,6 @@ internal class UpdateDownloadService : Service() {
         private const val ResultNotificationId = 2_202
         private const val AppRequestCode = 2_201
         private const val CancelRequestCode = 2_202
-        private const val InstallRequestCode = 2_203
         private const val PollIntervalMillis = 750L
         private val ActiveStatuses = setOf(UpdateDownloadStatus.Queued, UpdateDownloadStatus.Downloading)
 

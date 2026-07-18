@@ -68,6 +68,7 @@ class AppUpdateViewModel @Inject constructor(
         mutableAcceleratorAvailability.asStateFlow()
     private var acceleratorCheckJob: Job? = null
     private var downloadMonitorJob: Job? = null
+    private var downloadDialogInBackground = false
 
     init {
         viewModelScope.launch { resumeDownloadOrCheck() }
@@ -81,6 +82,12 @@ class AppUpdateViewModel @Inject constructor(
     }
 
     internal fun startDownload(release: AppRelease) = startDownload(release, customDownload = false)
+
+    internal fun continueDownloadInBackground() {
+        if (mutableState.value !is AppUpdateUiState.Downloading) return
+        downloadDialogInBackground = true
+        mutableState.value = AppUpdateUiState.Hidden
+    }
 
     internal fun startCustomDownload(rawUrl: String) {
         val url = normalizeCustomUpdateUrl(rawUrl)
@@ -113,7 +120,7 @@ class AppUpdateViewModel @Inject constructor(
             )
             return
         }
-        if (mutableState.value is AppUpdateUiState.Downloading) return
+        if (mutableState.value is AppUpdateUiState.Downloading || downloadMonitorJob?.isActive == true) return
 
         viewModelScope.launch {
             runCatching {
@@ -138,6 +145,7 @@ class AppUpdateViewModel @Inject constructor(
                 withContext(Dispatchers.IO) { UpdateDownloadStore.write(context, record) }
                 record
             }.onSuccess { record ->
+                downloadDialogInBackground = false
                 mutableState.value = record.toDownloadingState()
                 UpdateDownloadService.start(context)
                 monitorDownload(record)
@@ -157,6 +165,7 @@ class AppUpdateViewModel @Inject constructor(
             return
         }
         downloadMonitorJob?.cancel()
+        downloadDialogInBackground = false
         mutableState.value = if (record.customDownload) {
             AppUpdateUiState.Hidden
         } else {
@@ -178,6 +187,38 @@ class AppUpdateViewModel @Inject constructor(
 
     internal fun retry(release: AppRelease, customDownload: Boolean) {
         startDownload(release, customDownload)
+    }
+
+    internal fun refreshStoredDownload() {
+        if (mutableState.value !is AppUpdateUiState.Hidden) return
+        viewModelScope.launch {
+            val record = withContext(Dispatchers.IO) { UpdateDownloadStore.read(context) } ?: return@launch
+            when (record.status) {
+                UpdateDownloadStatus.Queued,
+                UpdateDownloadStatus.Downloading,
+                -> {
+                    downloadDialogInBackground = true
+                    if (downloadMonitorJob?.isActive != true) {
+                        UpdateDownloadService.start(context)
+                        monitorDownload(record)
+                    }
+                }
+                UpdateDownloadStatus.Ready -> {
+                    val apk = record.toVerifiedApk()?.takeIf { File(it.path).isFile } ?: return@launch
+                    downloadDialogInBackground = false
+                    mutableState.value = AppUpdateUiState.Ready(record.toRelease(), apk)
+                }
+                UpdateDownloadStatus.Failed -> {
+                    downloadDialogInBackground = false
+                    mutableState.value = AppUpdateUiState.Failed(
+                        record.toRelease(),
+                        record.errorMessage ?: "下载失败",
+                        record.customDownload,
+                    )
+                }
+                UpdateDownloadStatus.Cancelled -> Unit
+            }
+        }
     }
 
     fun checkNow() {
@@ -212,13 +253,15 @@ class AppUpdateViewModel @Inject constructor(
             UpdateDownloadStatus.Queued,
             UpdateDownloadStatus.Downloading,
             -> {
-                mutableState.value = record.toDownloadingState()
+                downloadDialogInBackground = true
+                mutableState.value = AppUpdateUiState.Hidden
                 UpdateDownloadService.start(context)
                 monitorDownload(record)
             }
             UpdateDownloadStatus.Ready -> {
                 val apk = record.toVerifiedApk()?.takeIf { File(it.path).isFile }
                 if (apk != null) {
+                    downloadDialogInBackground = false
                     mutableState.value = AppUpdateUiState.Ready(record.toRelease(), apk)
                 } else {
                     withContext(Dispatchers.IO) { UpdateDownloadStore.clear(context) }
@@ -226,6 +269,7 @@ class AppUpdateViewModel @Inject constructor(
                 }
             }
             UpdateDownloadStatus.Failed -> {
+                downloadDialogInBackground = false
                 mutableState.value = AppUpdateUiState.Failed(
                     record.toRelease(),
                     record.errorMessage ?: "下载失败",
@@ -289,10 +333,13 @@ class AppUpdateViewModel @Inject constructor(
                 when (record.status) {
                     UpdateDownloadStatus.Queued,
                     UpdateDownloadStatus.Downloading,
-                    -> mutableState.value = record.toDownloadingState()
+                    -> if (!downloadDialogInBackground) {
+                        mutableState.value = record.toDownloadingState()
+                    }
                     UpdateDownloadStatus.Ready -> {
                         val apk = record.toVerifiedApk()
                         if (apk != null && File(apk.path).isFile) {
+                            downloadDialogInBackground = false
                             mutableState.value = AppUpdateUiState.Ready(release, apk)
                         } else {
                             mutableState.value = AppUpdateUiState.Failed(
@@ -304,6 +351,7 @@ class AppUpdateViewModel @Inject constructor(
                         return@launch
                     }
                     UpdateDownloadStatus.Failed -> {
+                        downloadDialogInBackground = false
                         mutableState.value = AppUpdateUiState.Failed(
                             release,
                             record.errorMessage ?: "下载失败",
@@ -312,6 +360,7 @@ class AppUpdateViewModel @Inject constructor(
                         return@launch
                     }
                     UpdateDownloadStatus.Cancelled -> {
+                        downloadDialogInBackground = false
                         mutableState.value = if (record.customDownload) {
                             AppUpdateUiState.Hidden
                         } else {

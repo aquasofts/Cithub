@@ -139,8 +139,13 @@ jobs:
 
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           for apk in publish/*.apk; do
-            "$build_tools/apksigner" verify --verbose --print-certs "$apk"
-            cert_digest="$("$build_tools/apksigner" verify --print-certs "$apk" | awk -F': ' '/certificate SHA-256 digest/{print tolower($2); exit}')"
+            verification_output="$("$build_tools/apksigner" verify --verbose --print-certs "$apk")"
+            printf '%s\n' "$verification_output"
+            cert_digest="$(awk -F': ' '/certificate SHA-256 digest:/{print tolower($NF); exit}' <<< "$verification_output")"
+            if [[ ! "$cert_digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Could not extract the signer certificate SHA-256 digest from $apk." >&2
+              exit 1
+            fi
             if [[ "$cert_digest" != "$EXPECTED_RELEASE_CERT_SHA256" ]]; then
               echo "$apk uses $cert_digest instead of the established release certificate." >&2
               exit 1

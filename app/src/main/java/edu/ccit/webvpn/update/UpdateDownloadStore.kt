@@ -91,8 +91,12 @@ internal data class UpdateDownloadRecord(
     }
 }
 
-internal fun UpdateDownloadRecord.nextDownloadAttempt(): UpdateDownloadRecord? {
-    val retrySingleConnection = connections > 1 && !singleConnectionFallback
+internal fun UpdateDownloadRecord.nextDownloadAttempt(
+    retrySameRouteWithSingleConnection: Boolean = true,
+): UpdateDownloadRecord? {
+    val retrySingleConnection = retrySameRouteWithSingleConnection &&
+        connections > 1 &&
+        !singleConnectionFallback
     val nextUrlIndex = urlIndex + 1
     if (!retrySingleConnection && nextUrlIndex !in downloadUrls.indices) return null
 

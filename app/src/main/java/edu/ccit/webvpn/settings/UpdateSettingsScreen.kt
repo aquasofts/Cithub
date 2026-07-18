@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -112,6 +113,7 @@ internal fun UpdateSettingsScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = UpdateSettingsWindowInsets,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
@@ -126,6 +128,7 @@ internal fun UpdateSettingsScreen(
                         Text(if (checking) "检查中" else "检查更新")
                     }
                 },
+                windowInsets = UpdateSettingsWindowInsets,
             )
         },
     ) { padding ->
@@ -351,6 +354,8 @@ internal fun UpdateSettingsScreen(
         )
     }
 }
+
+private val UpdateSettingsWindowInsets = WindowInsets(0, 0, 0, 0)
 
 @Composable
 private fun SettingsSectionHeader(text: String, modifier: Modifier = Modifier) {

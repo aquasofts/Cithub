@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +26,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
@@ -34,6 +38,7 @@ internal fun AppUpdateHost(
     val state by updateViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var pendingInstallPath by remember { mutableStateOf<String?>(null) }
     var installError by remember { mutableStateOf<String?>(null) }
 
@@ -58,6 +63,17 @@ internal fun AppUpdateHost(
         } else if (path != null) {
             installError = "需要允许 Cithub 安装未知应用，才能继续覆盖更新"
         }
+    }
+
+    DisposableEffect(lifecycleOwner, updateViewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) updateViewModel.refreshStoredDownload()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            updateViewModel.refreshStoredDownload()
+        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(state) {
@@ -95,7 +111,7 @@ internal fun AppUpdateHost(
         }
         is AppUpdateUiState.Downloading -> {
             AlertDialog(
-                onDismissRequest = {},
+                onDismissRequest = updateViewModel::continueDownloadInBackground,
                 title = {
                     Text(
                         if (current.release.tagName == "custom-download") {
@@ -131,7 +147,11 @@ internal fun AppUpdateHost(
                         )
                     }
                 },
-                confirmButton = {},
+                confirmButton = {
+                    TextButton(onClick = updateViewModel::continueDownloadInBackground) {
+                        Text("后台下载")
+                    }
+                },
                 dismissButton = {
                     TextButton(onClick = updateViewModel::cancelDownload) { Text("取消下载") }
                 },

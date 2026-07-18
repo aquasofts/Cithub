@@ -5,11 +5,18 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.2`
-- Version code: `45`
+- Version name: `2.2.3`
+- Version code: `46`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.2.3 (versionCode 46) — 2026-07-18
+
+- Removed the visual “高赞” badge from Tieba floors while preserving highly liked floor discovery, content, ordering, and navigation.
+- Allowed update downloads to continue behind the app with foreground-service progress, then return to Cithub for an explicit install confirmation after completion.
+- Accepted a fully verified APK when Gopeed reports a late task error or task-query failure, and stopped retrying an already completed invalid payload through the same route with one connection.
+- Removed duplicated status-bar insets from Settings and its theme, interface, RSS, Tieba, and update subpages so their app bars sit at the normal top distance.
 
 ### 2.2.2 (versionCode 45) — 2026-07-18
 

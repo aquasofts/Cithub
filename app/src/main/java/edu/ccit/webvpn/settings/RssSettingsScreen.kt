@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -67,6 +68,7 @@ internal fun RssSettingsScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = RssSettingsWindowInsets,
         topBar = {
             TopAppBar(
                 title = { Text("RSS 订阅") },
@@ -87,6 +89,7 @@ internal fun RssSettingsScreen(
                         },
                     ) { Text("恢复默认") }
                 },
+                windowInsets = RssSettingsWindowInsets,
             )
         },
     ) { padding ->
@@ -151,6 +154,8 @@ internal fun RssSettingsScreen(
         )
     }
 }
+
+private val RssSettingsWindowInsets = WindowInsets(0, 0, 0, 0)
 
 private fun androidx.compose.foundation.lazy.LazyListScope.rssSection(
     kind: RssKind,
