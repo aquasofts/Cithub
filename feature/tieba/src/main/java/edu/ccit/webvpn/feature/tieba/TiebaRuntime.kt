@@ -149,9 +149,9 @@ class TiebaRuntime private constructor(context: Context) {
         }
     }
 
-    suspend fun exportSignDiagnostics(): String = signDiagnostics.exportText()
+    suspend fun exportRuntimeLog(): String = signDiagnostics.exportText()
 
-    suspend fun clearSignDiagnostics() = signDiagnostics.clear()
+    suspend fun clearRuntimeLog() = signDiagnostics.clear()
 
     private suspend fun finishAutomaticSignFailure(forumName: String, message: String) {
         val response = SignResponse(SignOutcome.FAILED, message)

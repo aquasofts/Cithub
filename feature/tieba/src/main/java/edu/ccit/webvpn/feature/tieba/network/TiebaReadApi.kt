@@ -61,7 +61,7 @@ import retrofit2.http.Header
 import retrofit2.http.Headers
 import retrofit2.http.POST
 
-internal const val TIEBA_V12_VERSION = "12.52.1.0"
+internal const val TIEBA_READ_VERSION = "22.8.5.0"
 internal const val TIEBA_V12_POST_VERSION = "12.35.1.0"
 private const val PROTOBUF_BOUNDARY = "--------7da3d81520810*"
 private const val TRACE_HEADER = "X-CCIT-Tieba-Request"
@@ -149,7 +149,7 @@ internal class TiebaClientIdentity(context: Context) {
     val clientLogId: String get() = activeTimestamp.toString()
     val firstInstallTime: Long get() = sharedState?.config?.firstInstallTime ?: packageInfo.firstInstallTime
     val lastUpdateTime: Long get() = sharedState?.config?.lastUpdateTime ?: packageInfo.lastUpdateTime
-    val userAgent: String = "$DEFAULT_USER_AGENT tieba/$TIEBA_V12_VERSION"
+    val userAgent: String = "$DEFAULT_USER_AGENT tieba/$TIEBA_READ_VERSION"
 
     fun applyClientConfig(config: TiebaClientConfig) {
         sharedState = SharedIdentityState(config, TiebaOfficialIdentity.create(appContext, config.uuid))
@@ -157,7 +157,7 @@ internal class TiebaClientIdentity(context: Context) {
 
     fun commonRequest(
         credentials: TiebaReadCredentials?,
-        clientVersion: String = TIEBA_V12_VERSION,
+        clientVersion: String = TIEBA_READ_VERSION,
         tbs: String? = null,
         postMode: Boolean = false,
         clientConfig: TiebaClientConfig? = null,

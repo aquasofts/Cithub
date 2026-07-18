@@ -10,12 +10,15 @@ import android.net.Uri
 import android.graphics.BitmapFactory
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import com.huanchengfly.tieba.post.api.models.protos.HotPost
 import com.huanchengfly.tieba.post.api.models.protos.PbContent
 import com.huanchengfly.tieba.post.api.models.protos.Post
 import com.huanchengfly.tieba.post.api.models.protos.PostInfoList
 import com.huanchengfly.tieba.post.api.models.protos.SubPostList
 import com.huanchengfly.tieba.post.api.models.protos.ThreadInfo
 import com.huanchengfly.tieba.post.api.models.protos.User
+import edu.ccit.webvpn.core.runtime.RuntimeLog
+import edu.ccit.webvpn.core.runtime.RuntimeLogInterceptor
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbFloor.PbFloorResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbPage.PbPageResponse
@@ -84,7 +87,7 @@ internal interface TiebaSupportApi {
         @Query("fname") forumName: String = TARGET_FORUM_NAME,
         @Query("ct") contentType: Int = 2,
         @Query("is_use_zonghe") useCombined: Int? = null,
-        @Query("cv") clientVersion: String = TIEBA_V12_VERSION,
+        @Query("cv") clientVersion: String = TIEBA_READ_VERSION,
         @Header("Referer") referer: String,
     ): SearchEnvelope
 
@@ -258,10 +261,16 @@ class TiebaNetworkRepository internal constructor(
                 .sign(account, forumName, tbs, attemptId)
         },
     private val zidProvider: suspend (TiebaClientConfig) -> String = { config ->
-        TiebaSofireClient(gson = gson).fetchZid(config.uuid)
+        TiebaSofireClient(
+            client = OkHttpClient.Builder()
+                .addInterceptor(RuntimeLogInterceptor(context, "tieba_sofire"))
+                .build(),
+            gson = gson,
+        ).fetchZid(config.uuid)
     },
 ) {
     private val identity = TiebaClientIdentity(context)
+    private val runtimeLog = RuntimeLog.get(context)
     /** Mirrors TiebaLite's photo-view initialization and returns a fresh, signed original URL. */
     suspend fun resolveOriginalImage(
         data: LoadPicPageData,
@@ -350,7 +359,7 @@ class TiebaNetworkRepository internal constructor(
         val referer = "https://tieba.baidu.com/mo/q/hybrid-usergrow-search/searchGlobal" +
             "?entryPage=frs&loadingSignal=1&forumName=$encodedName&forumId=${forumId.coerceAtLeast(0)}" +
             "&customfullscreen=1&nonavigationbar=1&timestamp=${System.currentTimeMillis()}" +
-            "&_client_version=$TIEBA_V12_VERSION&_client_type=2"
+            "&_client_version=$TIEBA_READ_VERSION&_client_type=2"
         val response = supportApi.search(keyword.trim(), page, forumName = requestedForumName, referer = referer)
         if (response.errorCode != 0) throw TiebaReadFailure.Service(IOException("Search API ${response.errorCode}"))
         val data = response.data ?: throw TiebaReadFailure.Data()
@@ -1098,13 +1107,39 @@ class TiebaNetworkRepository internal constructor(
         if (data.anti == null || thread.author == null) throw TiebaReadFailure.Data()
         val users = data.user_list.associateBy(User::id)
         val topAgreePosts = data.top_agree_post_list?.post_list.orEmpty()
-        val topAgreePostIds = buildSet {
+        val hotPostContainer = data.hot_post_list
+        val hotPosts = hotPostContainer?.post_list.orEmpty()
+        val fallbackHotPosts = hotPostContainer?.hot_post_list.orEmpty().map { it.toPost(users) }
+        val allContainerPosts = topAgreePosts + hotPosts + fallbackHotPosts + data.post_list
+        val highlyLikedPostIds = buildSet {
             addAll(data.top_agree_post_list?.post_id_list.orEmpty())
             topAgreePosts.forEach { add(it.id) }
+            hotPosts.forEach { add(it.id) }
+            hotPostContainer?.hot_post_list.orEmpty().forEach { add(it.post_id) }
+            allContainerPosts.filter { it.isHighlyLiked() }.forEach { add(it.id) }
         }
-        val mappedPosts = (topAgreePosts + data.post_list)
-            .distinctBy { it.id }
-            .map { post -> mapPost(post, users, isTopAgree = post.id in topAgreePostIds) }
+        runtimeLog.info(
+            source = "tieba",
+            event = "pb_page_post_containers",
+            fields = mapOf(
+                "thread_id" to threadId,
+                "requested_page" to requestedPage,
+                "highly_liked_post_ids" to highlyLikedPostIds.toList(),
+                "regular_post_ids" to data.post_list.map(Post::id),
+                "top_agree_post_ids" to topAgreePosts.map(Post::id),
+                "top_agree_id_list" to data.top_agree_post_list?.post_id_list.orEmpty(),
+                "hot_post_ids" to hotPosts.map(Post::id),
+                "hot_post_metadata_ids" to hotPostContainer?.hot_post_list.orEmpty().map(HotPost::post_id),
+                "wonderful_post_ids" to allContainerPosts.filter { it.is_wonderful_post != 0 }.map(Post::id),
+                "hot_post_needed" to hotPostContainer?.need_hot_post,
+            ),
+        )
+        val mergedPosts = linkedMapOf<Long, Post>()
+        allContainerPosts.forEach { post ->
+            if (post.id > 0) mergedPosts[post.id] = post
+        }
+        val mappedPosts = mergedPosts.values
+            .map { post -> mapPost(post, users, isTopAgree = post.id in highlyLikedPostIds) }
         val body = data.first_floor_post?.let { mapPost(it, users) }
             ?: mappedPosts.firstOrNull { it.floor == 1 }
         val floors = mappedPosts.filterNot { it.postId == body?.postId || it.floor == 1 }
@@ -1150,9 +1185,29 @@ class TiebaNetworkRepository internal constructor(
             authorTitle = author.level_name,
             authorIp = author.ip_address.ifBlank { author.ip },
             authorModeratorRole = author.moderatorRole(),
-            isTopAgree = isTopAgree || post.is_top_agree_post != 0,
+            isTopAgree = isTopAgree || post.isHighlyLiked(),
         )
     }
+
+    private fun Post.isHighlyLiked(): Boolean =
+        is_top_agree_post != 0 || is_hot_post != 0 || is_wonderful_post != 0
+
+    private fun HotPost.toPost(users: Map<Long, User>): Post = Post(
+        id = post_id,
+        floor = floor,
+        time = create_time,
+        content = content,
+        sub_post_number = post_num,
+        author_id = user_id,
+        author = users[user_id] ?: User(
+            id = user_id,
+            name = user_name,
+            nameShow = user_name,
+            portrait = portrait,
+        ),
+        post_zan = post_zan,
+        is_hot_post = 1,
+    )
 
     private fun mapReply(reply: SubPostList, users: Map<Long, User>): FloorReply {
         val author = reply.author ?: users[reply.author_id]
@@ -1363,7 +1418,7 @@ class TiebaNetworkRepository internal constructor(
             val appContext = context.applicationContext
             val gson = Gson()
             val cache = Cache(java.io.File(appContext.cacheDir, "tieba_http"), 64L * 1024L * 1024L)
-            val supportClient = OkHttpClient.Builder()
+            val baseClient = OkHttpClient.Builder()
                 .cache(cache)
                 .addInterceptor { chain ->
                     val original = chain.request()
@@ -1374,11 +1429,15 @@ class TiebaNetworkRepository internal constructor(
                         builder.build(),
                     )
                 }.build()
-            val identity = TiebaClientIdentity(appContext)
-            val readClient = supportClient.newBuilder()
-                .addInterceptor(tiebaReadHeaderInterceptor(appContext, identity))
+            val supportClient = baseClient.newBuilder()
+                .addInterceptor(RuntimeLogInterceptor(appContext, "tieba_support"))
                 .build()
-            val picPageClient = supportClient.newBuilder()
+            val identity = TiebaClientIdentity(appContext)
+            val readClient = baseClient.newBuilder()
+                .addInterceptor(tiebaReadHeaderInterceptor(appContext, identity))
+                .addInterceptor(RuntimeLogInterceptor(appContext, "tieba_read_pb"))
+                .build()
+            val picPageClient = baseClient.newBuilder()
                 .addInterceptor { chain ->
                     chain.proceed(
                         chain.request().newBuilder()
@@ -1390,7 +1449,9 @@ class TiebaNetworkRepository internal constructor(
                             .header("client_logid", identity.firstInstallTime.toString())
                             .build(),
                     )
-                }.build()
+                }
+                .addInterceptor(RuntimeLogInterceptor(appContext, "tieba_pic_page"))
+                .build()
             return TiebaNetworkRepository(
                 context = appContext,
                 client = supportClient,

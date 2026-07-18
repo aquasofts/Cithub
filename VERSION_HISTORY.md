@@ -5,11 +5,17 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.33`
-- Version code: `39`
+- Version name: `2.1.34`
+- Version code: `40`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.34 (versionCode 40) — 2026-07-18
+
+- Fixed highly liked Tieba floors such as post `153730217268` by using the current mobile client version and recognizing `top_agree_post_list`, both hot-post containers, and regular posts marked `is_wonderful_post`.
+- Replaced the sign-in-only diagnostics with a rotating, app-wide runtime log covering startup, Activity lifecycle, uncaught exceptions, network requests/responses, caught feed/image failures, and Tieba protobuf floor-container summaries.
+- Made the runtime log deliberately unredacted for troubleshooting, with an explicit in-app privacy warning; large bodies are truncated and binary media payloads are omitted to preserve useful error history.
 
 ### 2.1.33 (versionCode 39) — 2026-07-18
 

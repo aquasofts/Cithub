@@ -165,6 +165,7 @@ import coil3.size.SizeResolver
 import edu.ccit.webvpn.core.ui.CcitCard
 import edu.ccit.webvpn.core.ui.CcitColors
 import edu.ccit.webvpn.core.ui.LocalReduceMotion
+import edu.ccit.webvpn.core.runtime.RuntimeLog
 import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
 import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.feature.tieba.FloorSort
@@ -2768,15 +2769,30 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
                 )
             }
             item {
+                HorizontalDivider()
+            }
+            item {
+                SectionTitle("运行日志")
+            }
+            item {
                 ListItem(
                     modifier = Modifier.clickable {
                         scope.launch {
-                            context.copyText(runtime.exportSignDiagnostics())
-                            snackbar.showSnackbar("已复制脱敏后的签到诊断日志")
+                            context.copyText(runtime.exportRuntimeLog())
+                            snackbar.showSnackbar("运行日志已复制，请注意其中可能包含敏感信息")
                         }
                     },
-                    headlineContent = { Text("复制签到诊断日志") },
-                    supportingContent = { Text("包含签到阶段、请求字段名、协议版本、指纹和服务端错误，不包含账号凭据明文") },
+                    headlineContent = { Text("复制运行日志") },
+                    supportingContent = {
+                        Column {
+                            Text("包含应用启动、页面生命周期、异常、网络请求/响应及贴吧 PB 楼层容器摘要")
+                            Text(
+                                text = RuntimeLog.PRIVACY_WARNING,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    },
                     leadingContent = { Icon(Icons.Default.BugReport, null) },
                 )
             }
@@ -2784,11 +2800,11 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
                 ListItem(
                     modifier = Modifier.clickable {
                         scope.launch {
-                            runtime.clearSignDiagnostics()
-                            snackbar.showSnackbar("签到诊断日志已清空")
+                            runtime.clearRuntimeLog()
+                            snackbar.showSnackbar("运行日志已清空")
                         }
                     },
-                    headlineContent = { Text("清空签到诊断日志") },
+                    headlineContent = { Text("清空运行日志") },
                     leadingContent = { Icon(Icons.Default.DeleteSweep, null) },
                 )
             }

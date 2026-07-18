@@ -1,5 +1,7 @@
 package edu.ccit.webvpn.core.webvpn
 
+import android.content.Context
+import edu.ccit.webvpn.core.runtime.RuntimeLogInterceptor
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -13,6 +15,7 @@ object WebVpnNetwork {
     const val BaseUrl = "https://webvpn.ccit.edu.cn/"
 
     fun createClient(
+        context: Context,
         cookieJar: WebVpnCookieJar = WebVpnCookieJar(),
         enableHttpLogging: Boolean = false,
     ): OkHttpClient {
@@ -24,6 +27,7 @@ object WebVpnNetwork {
             .addInterceptor { chain ->
                 chain.proceed(asBrowserRequest(chain.request()))
             }
+            .addInterceptor(RuntimeLogInterceptor(context, "webvpn_and_academic"))
 
         if (enableHttpLogging) {
             clientBuilder.addInterceptor(

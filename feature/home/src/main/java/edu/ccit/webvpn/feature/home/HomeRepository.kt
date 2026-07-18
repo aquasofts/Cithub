@@ -2,6 +2,8 @@ package edu.ccit.webvpn.feature.home
 
 import android.content.Context
 import android.util.AtomicFile
+import edu.ccit.webvpn.core.runtime.RuntimeLog
+import edu.ccit.webvpn.core.runtime.RuntimeLogInterceptor
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -48,6 +50,7 @@ internal class HomeRepository(
     private val allowInsecureTestTransport: Boolean = false,
     private val officialSources: List<OfficialNewsSource> = OfficialNewsSources.all,
     private val officialParser: OfficialNewsParser = OfficialNewsParser(),
+    private val runtimeLog: RuntimeLog? = null,
 ) {
     suspend fun loadCached(section: HomeSection): List<HomeArticle> = withContext(Dispatchers.IO) {
         if (section == HomeSection.OFFICIAL) {
@@ -82,6 +85,12 @@ internal class HomeRepository(
                         status = FeedSourceStatus(source.id, source.fallbackTitle, fresh = true, usedCache = false),
                     )
                 } catch (error: Throwable) {
+                    runtimeLog?.error(
+                        source = "home",
+                        event = "feed_refresh_failed",
+                        error = error,
+                        fields = mapOf("source_id" to source.id, "source_name" to source.fallbackTitle),
+                    )
                     val failure = error.toFeedFailure()
                     val cached = readCached(source)
                     SourceResult(
@@ -113,6 +122,12 @@ internal class HomeRepository(
                         status = FeedSourceStatus(source.id, source.title, fresh = true, usedCache = false),
                     )
                 } catch (error: Throwable) {
+                    runtimeLog?.error(
+                        source = "home",
+                        event = "official_news_refresh_failed",
+                        error = error,
+                        fields = mapOf("source_id" to source.id, "source_name" to source.title),
+                    )
                     val failure = error.toFeedFailure()
                     val cached = readOfficialCache(source)
                     SourceResult(
@@ -274,8 +289,10 @@ internal class HomeRepository(
                 .callTimeout(30, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
+                .addInterceptor(RuntimeLogInterceptor(context, "home_news"))
                 .build(),
             sources = sources,
+            runtimeLog = RuntimeLog.get(context),
         )
     }
 }

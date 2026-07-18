@@ -45,7 +45,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun httpClient(cookieJar: WebVpnCookieJar): OkHttpClient = WebVpnNetwork.createClient(cookieJar)
+    fun httpClient(
+        @ApplicationContext context: Context,
+        cookieJar: WebVpnCookieJar,
+    ): OkHttpClient = WebVpnNetwork.createClient(context, cookieJar)
 
     @Provides
     @Singleton

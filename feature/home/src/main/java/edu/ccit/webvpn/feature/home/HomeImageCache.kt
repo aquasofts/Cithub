@@ -1,6 +1,8 @@
 package edu.ccit.webvpn.feature.home
 
 import android.content.Context
+import edu.ccit.webvpn.core.runtime.RuntimeLog
+import edu.ccit.webvpn.core.runtime.RuntimeLogInterceptor
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -29,12 +31,14 @@ internal data class CachedHomeImage(val file: File, val mimeType: String)
 internal class HomeImageCache private constructor(context: Context) {
     private val directory = File(context.cacheDir, "home_image_cache").apply { mkdirs() }
     private val locks = ConcurrentHashMap<String, Any>()
+    private val runtimeLog = RuntimeLog.get(context)
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(45, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .addInterceptor(RuntimeLogInterceptor(context, "home_image"))
         .build()
 
     fun cached(url: String): CachedHomeImage? {
@@ -102,7 +106,13 @@ internal class HomeImageCache private constructor(context: Context) {
                     trim()
                     CachedHomeImage(target, mime)
                 }
-            } catch (_: IOException) {
+            } catch (error: IOException) {
+                runtimeLog.error(
+                    source = "home",
+                    event = "image_cache_fetch_failed",
+                    error = error,
+                    fields = mapOf("url" to url),
+                )
                 File(directory, "$key.part").delete()
                 null
             }

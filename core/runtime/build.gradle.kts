@@ -3,23 +3,20 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
-    namespace = "edu.ccit.webvpn.core.webvpn"
+    namespace = "edu.ccit.webvpn.core.runtime"
     compileSdk = 35
 
     defaultConfig {
         minSdk = 26
-        consumerProguardFiles("consumer-rules.pro")
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
 }
 
 kotlin {
@@ -29,15 +26,11 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":core:runtime"))
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.datastore.preferences)
     api(libs.okhttp)
-    implementation(libs.okhttp.logging)
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.kotlinx.serialization)
-    api(libs.kotlinx.serialization.json)
+    implementation(libs.gson)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.robolectric)
 }

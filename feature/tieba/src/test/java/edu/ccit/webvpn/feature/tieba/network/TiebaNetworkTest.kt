@@ -6,9 +6,11 @@ import com.google.gson.Gson
 import com.huanchengfly.tieba.post.api.models.protos.Abstract as ThreadAbstract
 import com.huanchengfly.tieba.post.api.models.protos.Anti
 import com.huanchengfly.tieba.post.api.models.protos.Error
+import com.huanchengfly.tieba.post.api.models.protos.HotPost
 import com.huanchengfly.tieba.post.api.models.protos.Media
 import com.huanchengfly.tieba.post.api.models.protos.Page
 import com.huanchengfly.tieba.post.api.models.protos.PbContent
+import com.huanchengfly.tieba.post.api.models.protos.PbHotPost
 import com.huanchengfly.tieba.post.api.models.protos.PbTopAgreePost
 import com.huanchengfly.tieba.post.api.models.protos.Post
 import com.huanchengfly.tieba.post.api.models.protos.SimpleForum
@@ -51,7 +53,6 @@ import okhttp3.RequestBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -178,6 +179,112 @@ class TiebaNetworkTest {
         assertEquals(7, thread.floors.first().floor)
         assertEquals("高赞楼内容", thread.floors.first().content)
         assertTrue(thread.floors.first().isTopAgree)
+    }
+
+    @Test
+    fun repositoryIncludesPostsReturnedOnlyInHotPostSections() = runBlocking {
+        val fullHotPost = Post(
+            id = 13,
+            floor = 2,
+            time = 1_700_000_200,
+            author_id = 5,
+            content = listOf(PbContent(type = 0, text = "高赞楼完整内容")),
+            sub_post_number = 3,
+            is_wonderful_post = 1,
+        )
+        val metadataOnlyHotPost = HotPost(
+            thread_id = 9,
+            post_id = 14,
+            user_name = "发帖人",
+            user_id = 5,
+            post_num = 2,
+            content = listOf(PbContent(type = 0, text = "高赞楼元数据内容")),
+            create_time = 1_700_000_300,
+            floor = 8,
+            portrait = "portrait",
+        )
+        val response = successThread().let { source ->
+            source.copy(
+                data_ = source.data_?.copy(
+                    hot_post_list = PbHotPost(
+                        post_list = listOf(fullHotPost),
+                        hot_post_list = listOf(metadataOnlyHotPost),
+                    ),
+                ),
+            )
+        }
+
+        val thread = repository(FakeTiebaReadApi(successForum(), response))
+            .loadThread("9", 1, FloorSort.ASCENDING, onlyOriginalPoster = false)
+
+        assertEquals(listOf("13", "14", "12"), thread.floors.map { it.postId })
+        assertEquals(listOf(2, 8, 2), thread.floors.map { it.floor })
+        assertEquals("高赞楼完整内容", thread.floors[0].content)
+        assertEquals("高赞楼元数据内容", thread.floors[1].content)
+        assertEquals(3, thread.floors[0].replyCount)
+        assertEquals(2, thread.floors[1].replyCount)
+        assertTrue(thread.floors[0].isTopAgree)
+        assertTrue(thread.floors[1].isTopAgree)
+    }
+
+    @Test
+    fun repositoryMarksWonderfulPostFromRegularPostListAsHighlyLiked() = runBlocking {
+        val targetPostId = 153_730_217_268L
+        val response = successThread().let { source ->
+            source.copy(
+                data_ = source.data_?.copy(
+                    post_list = source.data_?.post_list.orEmpty().map { post ->
+                        post.copy(
+                            id = targetPostId,
+                            floor = 2,
+                            content = listOf(PbContent(type = 0, text = "真实高赞楼")),
+                            is_top_agree_post = 0,
+                            is_hot_post = 0,
+                            is_wonderful_post = 1,
+                        )
+                    },
+                ),
+            )
+        }
+
+        val thread = repository(FakeTiebaReadApi(successForum(), response))
+            .loadThread("10872814256", 1, FloorSort.ASCENDING, onlyOriginalPoster = false)
+
+        val floor = thread.floors.single()
+        assertEquals(targetPostId.toString(), floor.postId)
+        assertEquals(2, floor.floor)
+        assertEquals("真实高赞楼", floor.content)
+        assertTrue(floor.isTopAgree)
+    }
+
+    @Test
+    fun repositoryKeepsRegularPostDetailsWhenHighlyLikedContainersRepeatThePid() = runBlocking {
+        val duplicated = Post(
+            id = 12,
+            floor = 2,
+            time = 1_700_000_200,
+            author_id = 4,
+            content = listOf(PbContent(type = 0, text = "容器中的精简内容")),
+            is_top_agree_post = 1,
+        )
+        val response = successThread().let { source ->
+            source.copy(
+                data_ = source.data_?.copy(
+                    top_agree_post_list = PbTopAgreePost(
+                        post_list = listOf(duplicated),
+                        post_id_list = listOf(duplicated.id),
+                    ),
+                ),
+            )
+        }
+
+        val thread = repository(FakeTiebaReadApi(successForum(), response))
+            .loadThread("9", 1, FloorSort.ASCENDING, onlyOriginalPoster = false)
+
+        val floor = thread.floors.single()
+        assertEquals("正文#(黑线)", floor.content)
+        assertEquals(1, floor.replyCount)
+        assertTrue(floor.isTopAgree)
     }
 
     @Test
@@ -893,7 +1000,7 @@ class TiebaNetworkTest {
     }
 
     @Test
-    fun signDiagnosticsNeverPersistCredentialOrTbsPlaintext() = runBlocking {
+    fun runtimeLogKeepsCredentialAndTbsPlaintext() = runBlocking {
         val diagnostics = TiebaSignDiagnostics.get(context)
         diagnostics.clear()
         val account = AccountEntity(
@@ -932,12 +1039,12 @@ class TiebaNetworkTest {
         )
 
         val exported = diagnostics.exportText()
-        assertFalse(exported.contains("plain-bduss-must-not-leak"))
-        assertFalse(exported.contains("plain-stoken-must-not-leak"))
-        assertFalse(exported.contains("stored-tbs-must-not-leak"))
-        assertFalse(exported.contains("displayed-tbs-must-not-leak"))
-        assertFalse(exported.contains("plain-sign-must-not-leak"))
-        assertTrue(exported.contains("sha256:"))
+        assertTrue(exported.contains("plain-bduss-must-not-leak"))
+        assertTrue(exported.contains("plain-stoken-must-not-leak"))
+        assertTrue(exported.contains("stored-tbs-must-not-leak"))
+        assertTrue(exported.contains("displayed-tbs-must-not-leak"))
+        assertTrue(exported.contains("plain-sign-must-not-leak"))
+        assertTrue(exported.contains("运行日志不做脱敏"))
         diagnostics.clear()
     }
 

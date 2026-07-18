@@ -74,6 +74,7 @@ kotlin {
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 dependencies {
+    implementation(project(":core:runtime"))
     implementation(project(":core:ui"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

@@ -38,8 +38,8 @@ android {
         applicationId = "edu.ccit.webvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = ciVersionCode ?: 39
-        versionName = ciVersionName ?: "2.1.33"
+        versionCode = ciVersionCode ?: 40
+        versionName = ciVersionName ?: "2.1.34"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -108,6 +108,7 @@ kotlin {
 dependencies {
     implementation(project(":core:academic"))
     implementation(project(":core:captcha"))
+    implementation(project(":core:runtime"))
     implementation(project(":core:ui"))
     implementation(project(":core:webvpn"))
     implementation(project(":feature:home"))
