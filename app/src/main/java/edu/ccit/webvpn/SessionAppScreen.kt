@@ -92,6 +92,8 @@ import edu.ccit.webvpn.settings.AppearanceViewModel
 import edu.ccit.webvpn.settings.AcademicFeatureSettings
 import edu.ccit.webvpn.settings.NavigationLabel
 import edu.ccit.webvpn.settings.RssFeedSettings
+import edu.ccit.webvpn.settings.UpdateSettings
+import edu.ccit.webvpn.update.AppUpdateViewModel
 import edu.ccit.webvpn.feature.tieba.ui.TiebaAccountCard
 import edu.ccit.webvpn.feature.tieba.ui.TiebaLoginScreen
 import edu.ccit.webvpn.feature.tieba.ui.TiebaRootScreen
@@ -163,12 +165,16 @@ fun AuthenticatedApp(
     onLogout: () -> Unit,
     appearance: AppearanceState,
     appearanceViewModel: AppearanceViewModel,
+    updateViewModel: AppUpdateViewModel,
 ) {
     val storedFeatures by appearanceViewModel.academicFeatureSettings.collectAsStateWithLifecycle(
         initialValue = AcademicFeatureSettings(),
     )
     val rssFeeds by appearanceViewModel.rssFeedSettings.collectAsStateWithLifecycle(
         initialValue = RssFeedSettings(),
+    )
+    val updatePreferences by appearanceViewModel.updateSettings.collectAsStateWithLifecycle(
+        initialValue = UpdateSettings(),
     )
     val resolvedOrder = remember(storedFeatures.orderIds) {
         val saved = storedFeatures.orderIds.mapNotNull(AcademicFeature::fromId).distinct()
@@ -330,6 +336,9 @@ fun AuthenticatedApp(
                 uiSettings = appearanceViewModel.uiSettings,
                 rssFeedSettings = appearanceViewModel.rssFeedSettings,
                 currentRssFeeds = rssFeeds,
+                updateSettings = appearanceViewModel.updateSettings,
+                currentUpdateSettings = updatePreferences,
+                updateViewModel = updateViewModel,
                 reduceEffect = appearance.ui.reduceEffect,
                 onThemedIconChange = appearanceViewModel::setThemedAppIcon,
                 onBack = { rootBackStack.removeLastOrNull() },

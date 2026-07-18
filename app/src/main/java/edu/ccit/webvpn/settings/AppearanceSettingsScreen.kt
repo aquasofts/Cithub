@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Houseboat
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Style
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,6 +65,7 @@ import edu.ccit.webvpn.R
 import edu.ccit.webvpn.core.ui.ccitBackwardNavigationTransition
 import edu.ccit.webvpn.core.ui.ccitForwardNavigationTransition
 import edu.ccit.webvpn.feature.tieba.ui.TiebaSettingsScreen
+import edu.ccit.webvpn.update.AppUpdateViewModel
 import edu.ccit.webvpn.settings.preference.SegmentedPreference
 import edu.ccit.webvpn.settings.preference.SegmentedPrefsScreen
 import edu.ccit.webvpn.settings.preference.SegmentedTextPrefsScreen
@@ -85,6 +87,9 @@ private data object TiebaSettingsRoute : NavKey
 @Serializable
 private data object RssSettingsRoute : NavKey
 
+@Serializable
+private data object UpdateSettingsRoute : NavKey
+
 @Composable
 fun AppearanceSettingsScreen(
     current: AppearanceState,
@@ -92,6 +97,9 @@ fun AppearanceSettingsScreen(
     uiSettings: Settings<UISettings>,
     rssFeedSettings: Settings<RssFeedSettings>,
     currentRssFeeds: RssFeedSettings,
+    updateSettings: Settings<UpdateSettings>,
+    currentUpdateSettings: UpdateSettings,
+    updateViewModel: AppUpdateViewModel,
     reduceEffect: Boolean,
     onThemedIconChange: (Boolean) -> Unit,
     onBack: () -> Unit,
@@ -115,6 +123,7 @@ fun AppearanceSettingsScreen(
                 onUi = { navigateSingleTop(UiSettingsRoute) },
                 onRss = { navigateSingleTop(RssSettingsRoute) },
                 onTieba = { navigateSingleTop(TiebaSettingsRoute) },
+                onUpdate = { navigateSingleTop(UpdateSettingsRoute) },
             )
         }
         entry<ThemeSettingsRoute> {
@@ -142,6 +151,14 @@ fun AppearanceSettingsScreen(
                 onBack = { backStack.removeLastOrNull() },
             )
         }
+        entry<UpdateSettingsRoute> {
+            UpdateSettingsScreen(
+                settings = updateSettings,
+                initial = currentUpdateSettings,
+                updateViewModel = updateViewModel,
+                onBack = { backStack.removeLastOrNull() },
+            )
+        }
         },
     )
 }
@@ -153,6 +170,7 @@ private fun SettingsHomeScreen(
     onUi: () -> Unit,
     onRss: () -> Unit,
     onTieba: () -> Unit,
+    onUpdate: () -> Unit,
 ) {
     val themeTitle = stringResource(R.string.settings_theme_title)
     val themeSummary = stringResource(R.string.settings_theme_summary)
@@ -187,6 +205,13 @@ private fun SettingsHomeScreen(
                     title = "贴吧设置",
                     summary = "主页贴吧、阅读偏好、自动签到与最近结果",
                     icon = Icons.Outlined.Forum,
+                    trailingIcon = Icons.Outlined.Tune,
+                )
+                preference(
+                    onClick = onUpdate,
+                    title = "更新",
+                    summary = "版本、预览版与 GitHub 加速",
+                    icon = Icons.Outlined.SystemUpdate,
                     trailingIcon = Icons.Outlined.Tune,
                 )
             }

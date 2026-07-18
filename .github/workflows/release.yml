@@ -4,39 +4,44 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "V[0-9]*.[0-9]*.[0-9]*"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: rolling-prerelease
+  group: publish-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  prerelease:
-    name: Build latest Full and Lite pre-release APKs
+  publish:
+    name: Build signed Full and Lite APKs
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       PRERELEASE_TAG: prerelease
+      EXPECTED_RELEASE_CERT_SHA256: f9de6015c070e755465c9eee74cb492853421bbe9fec3d64ccaf4dbc65ad02c1
+      ANDROID_SIGNING_STORE_FILE: ${{ github.workspace }}/.ci/cithub-release.jks
+      ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+      ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+      ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
 
     steps:
-      - name: Check out latest source
+      - name: Check out source
         uses: actions/checkout@v6
         with:
           submodules: recursive
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Verify TiebaLite build sources
         shell: bash
         run: |
           set -euo pipefail
-
           proto_dir="TiebaLite/app/src/main/protos"
           helios_dir="TiebaLite/app/src/main/java/com/huanchengfly/tieba/post/utils/helios"
           proto_count="$(find "$proto_dir" -type f -name '*.proto' | wc -l)"
-
           if (( proto_count == 0 )); then
             echo "TiebaLite protobuf sources were not checked out." >&2
             exit 1
@@ -45,8 +50,24 @@ jobs:
             echo "TiebaLite Helios sources were not checked out." >&2
             exit 1
           fi
-
           echo "TiebaLite source check passed with $proto_count protobuf files."
+
+      - name: Validate formal release tag
+        if: startsWith(github.ref, 'refs/tags/V')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#V}"
+          if [[ ! "$tag_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Formal release tags must use V<major>.<minor>.<patch>." >&2
+            exit 1
+          fi
+          source_version="$(sed -nE 's/.*versionName = ciVersionName \?: "([^"]+)".*/\1/p' app/build.gradle.kts)"
+          if [[ "$source_version" != "$tag_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match app version $source_version." >&2
+            exit 1
+          fi
+          grep -Fq "### $tag_version (versionCode " VERSION_HISTORY.md
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -57,28 +78,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Restore pre-release signing key
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: cithub-prerelease-debug-keystore-v1
-
-      - name: Prepare pre-release signing key
+      - name: Restore stable publishing key
         shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.android"
-          if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
-            keytool -genkeypair \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000
-          fi
+          test -n "$KEYSTORE_BASE64"
+          test -n "$ANDROID_SIGNING_STORE_PASSWORD"
+          test -n "$ANDROID_SIGNING_KEY_ALIAS"
+          test -n "$ANDROID_SIGNING_KEY_PASSWORD"
+          mkdir -p "$(dirname "$ANDROID_SIGNING_STORE_FILE")"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ANDROID_SIGNING_STORE_FILE"
 
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
@@ -90,10 +101,13 @@ jobs:
           :feature:home:testDebugUnitTest
           :core:webvpn:testDebugUnitTest
           :core:academic:testDebugUnitTest
+          :app:testAutoCaptchaDebugUnitTest
+          :app:testManualCaptchaDebugUnitTest
+          :app:lintDebug
           --stacktrace
           --no-daemon
 
-      - name: Build latest optimized APKs
+      - name: Build optimized APKs
         run: >-
           ./gradlew
           :app:assembleAutoCaptchaPerformance
@@ -102,43 +116,79 @@ jobs:
           --no-daemon
 
       - name: Name and verify APKs
+        id: package
         shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p prerelease
-          cp app/build/outputs/apk/autoCaptcha/performance/app-autoCaptcha-performance.apk "prerelease/Full-Cithub-PreRelease.apk"
-          cp app/build/outputs/apk/manualCaptcha/performance/app-manualCaptcha-performance.apk "prerelease/Lite-Cithub-PreRelease.apk"
+          mkdir -p publish
+          if [[ "$GITHUB_REF" == refs/tags/V* ]]; then
+            mode="formal"
+            release_version="${GITHUB_REF_NAME#V}"
+            cp app/build/outputs/apk/autoCaptcha/performance/app-autoCaptcha-performance.apk \
+              "publish/Cithub-$release_version-auto-captcha-performance.apk"
+            cp app/build/outputs/apk/manualCaptcha/performance/app-manualCaptcha-performance.apk \
+              "publish/Cithub-$release_version-manual-captcha-performance.apk"
+          else
+            mode="prerelease"
+            release_version="$(sed -nE 's/.*versionName = ciVersionName \?: "([^"]+)".*/\1/p' app/build.gradle.kts)"
+            cp app/build/outputs/apk/autoCaptcha/performance/app-autoCaptcha-performance.apk \
+              "publish/Full-Cithub-$release_version-PreRelease.apk"
+            cp app/build/outputs/apk/manualCaptcha/performance/app-manualCaptcha-performance.apk \
+              "publish/Lite-Cithub-$release_version-PreRelease.apk"
+          fi
 
           build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          for apk in prerelease/*.apk; do
+          for apk in publish/*.apk; do
             "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+            cert_digest="$("$build_tools/apksigner" verify --print-certs "$apk" | awk -F': ' '/certificate SHA-256 digest/{print tolower($2); exit}')"
+            if [[ "$cert_digest" != "$EXPECTED_RELEASE_CERT_SHA256" ]]; then
+              echo "$apk uses $cert_digest instead of the established release certificate." >&2
+              exit 1
+            fi
             "$build_tools/zipalign" -c -P 16 -v 4 "$apk"
             if "$build_tools/aapt" dump badging "$apk" | grep -q "application-debuggable"; then
               echo "$apk is debuggable; refusing to publish it." >&2
               exit 1
             fi
+            if [[ "$mode" == "formal" ]]; then
+              "$build_tools/aapt" dump badging "$apk" | grep -q "versionName='$release_version-"
+            fi
             unzip -l "$apk" | grep -q "assets/dexopt/baseline.prof"
             unzip -l "$apk" | grep -q "assets/dexopt/baseline.profm"
           done
-
-          (cd prerelease && sha256sum ./*.apk > SHA256SUMS.txt)
+          (cd publish && sha256sum ./*.apk > SHA256SUMS.txt)
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Cithub-pre-release-${{ github.sha }}
-          path: prerelease/
+          name: Cithub-${{ github.ref_name }}-${{ github.sha }}
+          path: publish/
           if-no-files-found: error
           retention-days: 30
 
-      - name: Recreate rolling GitHub pre-release
+      - name: Publish formal GitHub Release
+        if: steps.package.outputs.mode == 'formal'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            publish/*.apk \
+            publish/SHA256SUMS.txt \
+            --verify-tag \
+            --title "Release ${{ steps.package.outputs.release_version }}" \
+            --generate-notes
 
+      - name: Recreate rolling GitHub pre-release
+        if: steps.package.outputs.mode == 'prerelease'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$PRERELEASE_TAG" >/dev/null 2>&1; then
             gh api \
               --method PATCH \
@@ -155,36 +205,25 @@ jobs:
               >/dev/null
           fi
 
-          release_notes="Automatically built from the latest main-branch commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
-
           gh api \
             --paginate \
             "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --jq '.[] | select(.prerelease == true) | .id' |
             while IFS= read -r release_id; do
               [[ -z "$release_id" ]] && continue
-              gh api \
-                --method DELETE \
-                "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-                >/dev/null
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null
             done
 
+          release_notes="Automatically built from the latest main-branch commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
           gh release create "$PRERELEASE_TAG" \
-            prerelease/*.apk \
-            prerelease/SHA256SUMS.txt \
+            publish/*.apk \
+            publish/SHA256SUMS.txt \
             --verify-tag \
             --prerelease \
-            --title "Cithub Pre-release" \
+            --title "Cithub Pre-release ${{ steps.package.outputs.release_version }}" \
             --notes "$release_notes"
 
-          prerelease_count="$(
-            gh api \
-              --paginate \
-              "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[] | select(.prerelease == true) | .id' |
-              wc -l
-          )"
-          if [[ "${prerelease_count//[[:space:]]/}" != "1" ]]; then
-            echo "Expected exactly one GitHub pre-release after publishing." >&2
-            exit 1
-          fi
+      - name: Remove publishing key
+        if: always()
+        shell: bash
+        run: rm -f "$ANDROID_SIGNING_STORE_FILE"

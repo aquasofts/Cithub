@@ -14,6 +14,7 @@ import com.google.android.material.color.utilities.Variant
 import dagger.hilt.android.qualifiers.ApplicationContext
 import edu.ccit.webvpn.feature.home.DefaultHomeFeedUrls
 import java.io.IOException
+import java.net.URI
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +73,12 @@ data class RssFeedSettings(
 )
 
 @Immutable
+data class UpdateSettings(
+    val previewReleases: Boolean = false,
+    val githubAccelerators: List<String> = emptyList(),
+)
+
+@Immutable
 abstract class Settings<T>(protected val flow: Flow<T>) : Flow<T> by flow {
     suspend fun snapshot(): T = first()
     abstract fun set(new: T)
@@ -83,6 +90,7 @@ interface SettingsRepository {
     val uiSettings: Settings<UISettings>
     val academicFeatureSettings: Settings<AcademicFeatureSettings>
     val rssFeedSettings: Settings<RssFeedSettings>
+    val updateSettings: Settings<UpdateSettings>
 }
 
 @Singleton
@@ -133,6 +141,11 @@ class DataStoreSettingsRepository @Inject constructor(
         read = ::readRssFeedSettings,
         write = ::writeRssFeedSettings,
     )
+
+    override val updateSettings: Settings<UpdateSettings> = settings(
+        read = ::readUpdateSettings,
+        write = ::writeUpdateSettings,
+    )
 }
 
 private val ThemeKey = stringPreferencesKey("theme")
@@ -148,6 +161,8 @@ private val FavoriteIdsKey = stringSetPreferencesKey("favorite_ids")
 private val FeatureOrderKey = stringPreferencesKey("feature_order")
 private val WechatRssUrlsKey = stringPreferencesKey("rss_wechat_urls")
 private val NewsRssUrlsKey = stringPreferencesKey("rss_news_urls")
+private val PreviewReleasesKey = booleanPreferencesKey("update_preview_releases")
+private val GithubAcceleratorsKey = stringPreferencesKey("update_github_accelerators")
 
 internal fun readThemeSettings(preferences: Preferences): ThemeSettings = ThemeSettings(
     theme = preferences[ThemeKey].enumOr(Theme.DYNAMIC),
@@ -214,12 +229,43 @@ internal fun writeRssFeedSettings(
     preferences[NewsRssUrlsKey] = value.newsUrls.normalizedRssUrls().joinToString("\n")
 }
 
+internal fun readUpdateSettings(preferences: Preferences): UpdateSettings = UpdateSettings(
+    previewReleases = preferences[PreviewReleasesKey] ?: false,
+    githubAccelerators = preferences[GithubAcceleratorsKey]
+        ?.lineSequence()
+        ?.mapNotNull(::normalizeGithubAccelerator)
+        ?.distinct()
+        ?.toList()
+        .orEmpty(),
+)
+
+internal fun writeUpdateSettings(
+    preferences: androidx.datastore.preferences.core.MutablePreferences,
+    value: UpdateSettings,
+) {
+    preferences[PreviewReleasesKey] = value.previewReleases
+    preferences[GithubAcceleratorsKey] = value.githubAccelerators
+        .mapNotNull(::normalizeGithubAccelerator)
+        .distinct()
+        .joinToString("\n")
+}
+
 private fun Preferences.readRssUrls(key: Preferences.Key<String>, defaults: List<String>): List<String> =
     get(key)?.lineSequence()?.toList()?.normalizedRssUrls() ?: defaults
 
 private fun List<String>.normalizedRssUrls(): List<String> = map(String::trim)
     .filter(String::isNotBlank)
     .distinct()
+
+internal fun normalizeGithubAccelerator(raw: String): String? = runCatching {
+    URI(raw.trim()).takeIf { uri ->
+        uri.scheme.equals("https", ignoreCase = true) &&
+            !uri.host.isNullOrBlank() &&
+            uri.userInfo.isNullOrBlank() &&
+            uri.rawQuery.isNullOrBlank() &&
+            uri.rawFragment.isNullOrBlank()
+    }?.toASCIIString()?.trimEnd('/')
+}.getOrNull()?.takeIf(String::isNotBlank)
 
 private inline fun <reified T : Enum<T>> String?.enumOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default

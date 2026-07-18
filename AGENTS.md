@@ -19,7 +19,7 @@ These rules apply to the entire repository.
 
 ## Version management and history
 
-- The current project version and the complete version-change record are maintained in `VERSION_HISTORY.md`. The default `versionName` and `versionCode` in `app/build.gradle.kts` must always match its current-version entry. The current version is `2.1.0` (`versionCode` 6).
+- The current project version and the complete version-change record are maintained in `VERSION_HISTORY.md`. The default `versionName` and `versionCode` in `app/build.gradle.kts` must always match its current-version entry. The current version is `2.1.36` (`versionCode` 42).
 - Before every APK- or bundle-producing build batch (`assemble*`, `bundle*`, or an equivalent packaging task), automatically update the version. Unless the user explicitly requests another version, increment the semantic-version patch component and increment `versionCode` by one. A single command that produces multiple flavors or build types counts as one build batch, so every output from that batch shares the same base version.
 - Update the version once before the first build attempt. Retrying the same failed or interrupted build does not increment it again. Compilation, unit tests, lint, and other verification tasks that do not package an APK or app bundle do not change the version.
 - Every version update must add a dated entry to `VERSION_HISTORY.md` before packaging. Record the version name, version code, and concise user-visible changes; never replace or silently rewrite an older entry. If a requested version already exists, append clarification to its existing entry instead of creating a duplicate heading.
@@ -60,6 +60,16 @@ These rules apply to the entire repository.
 - The local `performance` build may use the debug signing key for device testing only. Production artifacts must use the production release signing configuration.
 - Add or regenerate an app-specific Baseline Profile with Macrobenchmark when a suitable physical device or managed benchmark device is available. Cover startup, bottom-tab switching, opening grades and timetable, scrolling, and predictive back.
 - Reflection-based libraries such as Retrofit must own their R8 rules in the corresponding library module's consumer rules. Preserve service annotations and suspend-function generic signatures, then smoke-test authentication with the minified performance build.
+
+## Application updates and signing
+
+- Production updates must remain directly installable over the previously published package. Preserve `applicationId`, monotonically increase `versionCode`, keep the established publishing certificate, and retain explicit migrations for persistent data.
+- Before handing off or publishing an update, verify package name, flavor, version code, signer compatibility, and a replace-install path. If Android security or an unavoidable data migration makes reinstalling necessary, tell the user explicitly; never imply that an incompatible package can update in place.
+- Automatic background checks must stay silent when GitHub and every configured accelerator are unavailable. Only a user-initiated check from Settings may surface a network error.
+- Check formal GitHub Releases by default. Include GitHub Pre-releases only when the user enables preview builds in Settings; drafts must never be offered.
+- Support multiple user-configured HTTPS GitHub accelerator prefixes. Preserve their user-defined priority, try them from highest to lowest, and fall back to the direct GitHub URL last for both metadata and APK downloads.
+- Keep update UI production-focused and concise. Do not add explanatory paragraphs, implementation details, or redundant safety claims to dialogs and settings screens.
+- Every publicly distributed formal or preview APK must use the established certificate SHA-256 `f9de6015c070e755465c9eee74cb492853421bbe9fec3d64ccaf4dbc65ad02c1`; CI must reject other signers.
 
 ## UI correctness
 

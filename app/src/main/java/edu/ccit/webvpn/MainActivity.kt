@@ -87,6 +87,8 @@ import edu.ccit.webvpn.settings.AppearanceViewModel
 import edu.ccit.webvpn.settings.DarkPreference
 import edu.ccit.webvpn.settings.Theme
 import edu.ccit.webvpn.feature.tieba.TiebaRuntime
+import edu.ccit.webvpn.update.AppUpdateHost
+import edu.ccit.webvpn.update.AppUpdateViewModel
 import kotlinx.coroutines.delay
 
 @AndroidEntryPoint
@@ -113,12 +115,17 @@ class MainActivity : ComponentActivity() {
             ) {
                 val webVpnViewModel: WebVpnViewModel = viewModel()
                 val academicViewModel: AcademicViewModel = viewModel()
-                WebVpnApp(
-                    viewModel = webVpnViewModel,
-                    academicViewModel = academicViewModel,
-                    appearance = appearance,
-                    appearanceViewModel = appearanceViewModel,
-                )
+                val updateViewModel: AppUpdateViewModel = viewModel()
+                Box(Modifier.fillMaxSize()) {
+                    WebVpnApp(
+                        viewModel = webVpnViewModel,
+                        academicViewModel = academicViewModel,
+                        appearance = appearance,
+                        appearanceViewModel = appearanceViewModel,
+                        updateViewModel = updateViewModel,
+                    )
+                    AppUpdateHost(updateViewModel)
+                }
             }
         }
     }
@@ -145,6 +152,7 @@ private fun WebVpnApp(
     academicViewModel: AcademicViewModel,
     appearance: AppearanceState,
     appearanceViewModel: AppearanceViewModel,
+    updateViewModel: AppUpdateViewModel,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val academicState by academicViewModel.uiState.collectAsStateWithLifecycle()
@@ -236,6 +244,7 @@ private fun WebVpnApp(
                 onLogout = viewModel::logout,
                 appearance = appearance,
                 appearanceViewModel = appearanceViewModel,
+                updateViewModel = updateViewModel,
             )
         }
     }

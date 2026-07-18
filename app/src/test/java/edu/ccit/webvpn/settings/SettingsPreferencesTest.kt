@@ -62,16 +62,22 @@ class SettingsPreferencesTest {
             wechatUrls = listOf("https://example.com/wechat.xml"),
             newsUrls = listOf("https://example.com/news.xml"),
         )
+        val update = UpdateSettings(
+            previewReleases = true,
+            githubAccelerators = listOf("https://mirror-a.example", "https://mirror-b.example/proxy"),
+        )
 
         writeThemeSettings(preferences, theme)
         writeUiSettings(preferences, ui)
         writeAcademicFeatureSettings(preferences, features)
         writeRssFeedSettings(preferences, rss)
+        writeUpdateSettings(preferences, update)
 
         assertEquals(theme, readThemeSettings(preferences))
         assertEquals(ui, readUiSettings(preferences))
         assertEquals(features, readAcademicFeatureSettings(preferences))
         assertEquals(rss, readRssFeedSettings(preferences))
+        assertEquals(update, readUpdateSettings(preferences))
         assertFalse(
             SettingsSegmentedPrefsScope::class.java.methods.any { method ->
                 method.parameterTypes.any { it.name == "kotlin.reflect.KProperty1" }
@@ -90,5 +96,13 @@ class SettingsPreferencesTest {
             normalizeRssUrl("[校内新闻](https://cit-news.pages.dev/rss.xml)"),
         )
         assertEquals(null, normalizeRssUrl("http://example.com/rss.xml"))
+    }
+
+    @Test
+    fun updateSettingsDefaultToFormalAndNormalizeAccelerators() {
+        assertEquals(UpdateSettings(), readUpdateSettings(emptyPreferences()))
+        assertEquals("https://mirror.example/proxy", normalizeGithubAccelerator(" https://mirror.example/proxy/ "))
+        assertEquals(null, normalizeGithubAccelerator("http://mirror.example"))
+        assertEquals(null, normalizeGithubAccelerator("https://user@mirror.example"))
     }
 }

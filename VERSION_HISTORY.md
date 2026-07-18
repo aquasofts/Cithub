@@ -5,11 +5,24 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.34`
-- Version code: `40`
+- Version name: `2.1.36`
+- Version code: `42`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.36 (versionCode 42) — 2026-07-18
+
+- Continued APK fallback when an accelerator returns a successful HTTP response containing a damaged, incompatible, or non-APK payload; the direct GitHub URL remains the final attempt.
+- Kept the preview-build setting concise while preserving formal-only background checks by default.
+
+### 2.1.35 (versionCode 41) — 2026-07-18
+
+- Added silent startup checks for the latest formal `aquasofts/Cithub` GitHub Release, with an opt-in preview setting that also considers Pre-releases; drafts are always excluded.
+- Added a Settings update page with manual checks, ordered HTTPS GitHub accelerator prefixes, and automatic high-to-low fallback followed by direct GitHub for metadata and APK downloads.
+- Added system-managed APK downloads and pre-install validation of the package name, flavor, semantic version, increasing version code, and signing lineage before opening the Android package installer.
+- Preserved accounts, settings, Tieba data, and reply drafts during upgrades while clearing only disposable image, feed, HTTP, and downloaded-update caches that can become incompatible across versions.
+- Unified future rolling pre-release and formal-release publishing on the established formal certificate, and made CI reject any APK signed with a different key before upload.
 
 ### 2.1.34 (versionCode 40) — 2026-07-18
 
