@@ -16,6 +16,7 @@ This file is the canonical record of the app version. Keep it synchronized with 
 - Added horizontal paging for multiple images posted in the same Tieba floor, both inline and in the original-image viewer.
 - Replaced Tieba image-save confirmations with a long-press context menu containing only “保存图片”, available before and after opening an image.
 - Disabled pinch-to-zoom for news article pages while adding tap-to-open image zoom and the same long-press image-save menu in article and full-image views.
+- Fixed clean GitHub Actions builds by checking out the TiebaLite submodule before generating the Wire protobuf models and compiling the rolling pre-release APKs.
 
 ### 2.1.30 (versionCode 36) — 2026-07-18
 

@@ -694,19 +694,19 @@ private fun FullArticleImageScreen(url: String, onBack: () -> Unit) {
 
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         HomeImageSaveContextMenu(
-            modifier = Modifier.fillMaxSize().graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationX = offsetX
-                translationY = offsetY
-            }.transformable(transform),
+            modifier = Modifier.fillMaxSize().transformable(transform),
             onSave = saveAction.save,
             saveEnabled = !failed && !saveAction.saving,
         ) {
             AsyncImage(
                 model = request,
                 contentDescription = "新闻图片",
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offsetX
+                    translationY = offsetY
+                },
                 contentScale = ContentScale.Fit,
                 onLoading = {
                     loading = true

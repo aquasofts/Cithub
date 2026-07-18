@@ -1625,6 +1625,32 @@ private fun TiebaContentBody(
     val effectiveContent = content.ifEmpty {
         fallbackText.takeIf(String::isNotBlank)?.let { listOf(TiebaContent.Text(it)) }.orEmpty()
     }
+    val floorImages = remember(effectiveContent) { effectiveContent.filterIsInstance<TiebaContent.Image>() }
+    val floorPicItems = remember(floorImages, threadId, postId, forumId, forumName, seeLz) {
+        floorImages.mapIndexed { index, image ->
+            val picId = image.picId.ifBlank {
+                image.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
+            }
+            val picIndex = index + 1
+            PicItem(
+                picId = picId,
+                picIndex = picIndex,
+                originUrl = image.originalUrl,
+                postId = postId,
+                loadData = LoadPicPageData(
+                    forumId = forumId,
+                    forumName = forumName,
+                    seeLz = seeLz,
+                    objType = "pb",
+                    picId = picId,
+                    picIndex = picIndex,
+                    threadId = threadId,
+                    postId = postId,
+                    originUrl = image.originalUrl,
+                ),
+            )
+        }
+    }
     val blocks = remember(effectiveContent) {
         buildList<List<TiebaContent>> {
             var text = mutableListOf<TiebaContent>()
@@ -1663,18 +1689,17 @@ private fun TiebaContentBody(
         }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        var floorImageIndex = 0
         blocks.forEach { block ->
             val images = block.filterIsInstance<TiebaContent.Image>()
             if (images.size == block.size && images.isNotEmpty()) {
                 TiebaImageCarousel(
                     images = images,
-                    threadId = threadId,
-                    postId = postId,
-                    forumId = forumId,
-                    forumName = forumName,
-                    seeLz = seeLz,
+                    floorPicItems = floorPicItems,
+                    floorStartIndex = floorImageIndex,
                     onImage = onImage,
                 )
+                floorImageIndex += images.size
             } else {
                 when (val media = block.singleOrNull()) {
                     is TiebaContent.Video -> VideoPlayer(media.url)
@@ -1696,40 +1721,12 @@ private fun TiebaContentBody(
 @Composable
 private fun TiebaImageCarousel(
     images: List<TiebaContent.Image>,
-    threadId: Long,
-    postId: Long,
-    forumId: Long,
-    forumName: String,
-    seeLz: Boolean,
+    floorPicItems: List<PicItem>,
+    floorStartIndex: Int,
     onImage: (PhotoViewData) -> Unit,
 ) {
     val context = LocalContext.current
     val runtime = remember(context) { TiebaRuntime.get(context) }
-    val picItems = remember(images, threadId, postId, forumId, forumName, seeLz) {
-        images.mapIndexed { index, image ->
-            val picId = image.picId.ifBlank {
-                image.originalUrl.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
-            }
-            val picIndex = index + 1
-            PicItem(
-                picId = picId,
-                picIndex = picIndex,
-                originUrl = image.originalUrl,
-                postId = postId,
-                loadData = LoadPicPageData(
-                    forumId = forumId,
-                    forumName = forumName,
-                    seeLz = seeLz,
-                    objType = "pb",
-                    picId = picId,
-                    picIndex = picIndex,
-                    threadId = threadId,
-                    postId = postId,
-                    originUrl = image.originalUrl,
-                ),
-            )
-        }
-    }
     val pagerState = rememberPagerState(pageCount = { images.size })
     val currentImage = images[pagerState.currentPage.coerceIn(images.indices)]
     val ratio = if (currentImage.width != null && currentImage.height != null && currentImage.height > 0) {
@@ -1746,11 +1743,12 @@ private fun TiebaImageCarousel(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize().clipToBounds(),
-            key = { page -> "${picItems[page].picId}:$page" },
+            key = { page -> "${floorPicItems[floorStartIndex + page].picId}:$page" },
             beyondViewportPageCount = 1,
         ) { page ->
-            val item = picItems[page]
-            val photoData = PhotoViewData(picItems = picItems, index = page)
+            val floorIndex = floorStartIndex + page
+            val item = floorPicItems[floorIndex]
+            val photoData = PhotoViewData(picItems = floorPicItems, index = floorIndex)
             val saveAction = rememberTiebaImageSaveAction(runtime, item)
             ImageSaveContextMenu(
                 modifier = Modifier.fillMaxSize(),
@@ -2473,12 +2471,7 @@ private fun FullImagePage(
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         request?.let { originalRequest ->
             ImageSaveContextMenu(
-                modifier = Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offsetX
-                    translationY = offsetY
-                }.transformable(transform),
+                modifier = Modifier.fillMaxSize().transformable(transform),
                 onClick = {},
                 onSave = saveAction.save,
                 saveEnabled = resolvedUrl != null && !failed && !saveAction.saving,
@@ -2486,7 +2479,12 @@ private fun FullImagePage(
                 AsyncImage(
                     model = originalRequest,
                     contentDescription = "原图",
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offsetX
+                        translationY = offsetY
+                    },
                     contentScale = ContentScale.Fit,
                     onLoading = {
                         loading = true

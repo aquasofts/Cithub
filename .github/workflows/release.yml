@@ -24,6 +24,29 @@ jobs:
     steps:
       - name: Check out latest source
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify TiebaLite build sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          proto_dir="TiebaLite/app/src/main/protos"
+          helios_dir="TiebaLite/app/src/main/java/com/huanchengfly/tieba/post/utils/helios"
+          proto_count="$(find "$proto_dir" -type f -name '*.proto' | wc -l)"
+
+          if (( proto_count == 0 )); then
+            echo "TiebaLite protobuf sources were not checked out." >&2
+            exit 1
+          fi
+          if [[ ! -d "$helios_dir" ]]; then
+            echo "TiebaLite Helios sources were not checked out." >&2
+            exit 1
+          fi
+
+          echo "TiebaLite source check passed with $proto_count protobuf files."
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
