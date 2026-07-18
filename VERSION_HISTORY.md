@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.32`
-- Version code: `38`
+- Version name: `2.1.33`
+- Version code: `39`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.33 (versionCode 39) — 2026-07-18
+
+- Fixed Tieba floors marked as highly liked being omitted because the mobile protobuf returns them through the separate `top_agree_post_list` instead of the normal post list.
+- Added an in-app "高赞" badge and regression coverage for opening a floor that exists only in the highly liked section.
 
 ### 2.1.32 (versionCode 38) — 2026-07-18
 

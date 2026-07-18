@@ -227,6 +227,7 @@ data class ThreadFloor(
     val authorTitle: String = "",
     val authorIp: String = "",
     val authorModeratorRole: TiebaModeratorRole? = null,
+    val isTopAgree: Boolean = false,
 )
 
 @Immutable

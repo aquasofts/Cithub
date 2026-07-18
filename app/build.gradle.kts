@@ -38,8 +38,8 @@ android {
         applicationId = "edu.ccit.webvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = ciVersionCode ?: 38
-        versionName = ciVersionName ?: "2.1.32"
+        versionCode = ciVersionCode ?: 39
+        versionName = ciVersionName ?: "2.1.33"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -1097,7 +1097,14 @@ class TiebaNetworkRepository internal constructor(
         val thread = data.thread ?: throw TiebaReadFailure.Data()
         if (data.anti == null || thread.author == null) throw TiebaReadFailure.Data()
         val users = data.user_list.associateBy(User::id)
-        val mappedPosts = data.post_list.map { mapPost(it, users) }.distinctBy(ThreadFloor::postId)
+        val topAgreePosts = data.top_agree_post_list?.post_list.orEmpty()
+        val topAgreePostIds = buildSet {
+            addAll(data.top_agree_post_list?.post_id_list.orEmpty())
+            topAgreePosts.forEach { add(it.id) }
+        }
+        val mappedPosts = (topAgreePosts + data.post_list)
+            .distinctBy { it.id }
+            .map { post -> mapPost(post, users, isTopAgree = post.id in topAgreePostIds) }
         val body = data.first_floor_post?.let { mapPost(it, users) }
             ?: mappedPosts.firstOrNull { it.floor == 1 }
         val floors = mappedPosts.filterNot { it.postId == body?.postId || it.floor == 1 }
@@ -1114,7 +1121,11 @@ class TiebaNetworkRepository internal constructor(
         )
     }
 
-    private fun mapPost(post: Post, users: Map<Long, User>): ThreadFloor {
+    private fun mapPost(
+        post: Post,
+        users: Map<Long, User>,
+        isTopAgree: Boolean = false,
+    ): ThreadFloor {
         val author = post.author ?: users[post.author_id] ?: throw TiebaReadFailure.Data()
         val content = post.content
         val richContent = content.mapTiebaContent()
@@ -1139,6 +1150,7 @@ class TiebaNetworkRepository internal constructor(
             authorTitle = author.level_name,
             authorIp = author.ip_address.ifBlank { author.ip },
             authorModeratorRole = author.moderatorRole(),
+            isTopAgree = isTopAgree || post.is_top_agree_post != 0,
         )
     }
 

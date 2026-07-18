@@ -9,6 +9,7 @@ import com.huanchengfly.tieba.post.api.models.protos.Error
 import com.huanchengfly.tieba.post.api.models.protos.Media
 import com.huanchengfly.tieba.post.api.models.protos.Page
 import com.huanchengfly.tieba.post.api.models.protos.PbContent
+import com.huanchengfly.tieba.post.api.models.protos.PbTopAgreePost
 import com.huanchengfly.tieba.post.api.models.protos.Post
 import com.huanchengfly.tieba.post.api.models.protos.SimpleForum
 import com.huanchengfly.tieba.post.api.models.protos.SubPost
@@ -148,6 +149,35 @@ class TiebaNetworkTest {
         assertEquals("吉林", thread.floors.single().authorIp)
         assertEquals(TiebaModeratorRole.ASSISTANT, thread.floors.single().authorModeratorRole)
         assertEquals(TiebaModeratorRole.OWNER, thread.floors.single().replies.single().authorModeratorRole)
+    }
+
+    @Test
+    fun repositoryIncludesPostsReturnedOnlyInTopAgreeSection() = runBlocking {
+        val topAgreePost = Post(
+            id = 13,
+            floor = 7,
+            time = 1_700_000_200,
+            author_id = 5,
+            content = listOf(PbContent(type = 0, text = "高赞楼内容")),
+        )
+        val response = successThread().let { source ->
+            source.copy(
+                data_ = source.data_?.copy(
+                    top_agree_post_list = PbTopAgreePost(
+                        post_list = listOf(topAgreePost),
+                        post_id_list = listOf(topAgreePost.id),
+                    ),
+                ),
+            )
+        }
+
+        val thread = repository(FakeTiebaReadApi(successForum(), response))
+            .loadThread("9", 1, FloorSort.ASCENDING, onlyOriginalPoster = false, focusPostId = "13")
+
+        assertEquals(listOf("13", "12"), thread.floors.map { it.postId })
+        assertEquals(7, thread.floors.first().floor)
+        assertEquals("高赞楼内容", thread.floors.first().content)
+        assertTrue(thread.floors.first().isTopAgree)
     }
 
     @Test
