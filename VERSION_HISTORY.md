@@ -5,11 +5,18 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.1`
-- Version code: `44`
+- Version name: `2.2.2`
+- Version code: `45`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.2.2 (versionCode 45) — 2026-07-18
+
+- Added configurable update download concurrency from 1 to 64 connections, defaulting new installs to 16 connections.
+- Added automatic same-route single-connection fallback before moving to the next configured GitHub accelerator or direct GitHub URL.
+- Added one-off custom HTTPS APK downloads in Settings using the same Gopeed engine, installability checks, flavor/version checks, and signer compatibility protection.
+- Reworked Settings for narrow phones with consistent compact app bars, aligned theme cards, a full-width custom color option, grouped update controls, and accelerator actions that no longer squeeze their address text.
 
 ### 2.2.1 (versionCode 44) — 2026-07-18
 

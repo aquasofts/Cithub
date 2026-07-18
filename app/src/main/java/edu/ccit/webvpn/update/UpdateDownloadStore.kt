@@ -35,11 +35,16 @@ internal data class UpdateDownloadRecord(
     val downloadedBytes: Long = 0L,
     val speedBytesPerSecond: Long = 0L,
     val connections: Int = DefaultConnections,
+    val singleConnectionFallback: Boolean = false,
+    val customDownload: Boolean = false,
     val verifiedVersionCode: Long? = null,
     val errorMessage: String? = null,
 ) {
     val currentUrl: String
         get() = downloadUrls[urlIndex]
+
+    val activeConnections: Int
+        get() = if (singleConnectionFallback) 1 else connections.coerceIn(1, 64)
 
     fun toRelease(): AppRelease = AppRelease(
         version = requireNotNull(SemanticVersion.parse(version)),
@@ -52,16 +57,18 @@ internal data class UpdateDownloadRecord(
     )
 
     fun toVerifiedApk(): VerifiedUpdateApk? = verifiedVersionCode?.let { code ->
-        VerifiedUpdateApk(destinationPath, code)
+        SemanticVersion.parse(version)?.let { version -> VerifiedUpdateApk(destinationPath, code, version) }
     }
 
     companion object {
-        const val DefaultConnections = 8
+        const val DefaultConnections = 16
 
         fun create(
             destination: File,
             release: AppRelease,
             downloadUrls: List<String>,
+            connections: Int = DefaultConnections,
+            customDownload: Boolean = false,
         ): UpdateDownloadRecord {
             val asset = requireNotNull(release.asset)
             return UpdateDownloadRecord(
@@ -77,9 +84,28 @@ internal data class UpdateDownloadRecord(
                 assetUrl = asset.downloadUrl,
                 prerelease = release.prerelease,
                 downloadUrls = downloadUrls,
+                connections = connections.coerceAtLeast(1),
+                customDownload = customDownload,
             )
         }
     }
+}
+
+internal fun UpdateDownloadRecord.nextDownloadAttempt(): UpdateDownloadRecord? {
+    val retrySingleConnection = connections > 1 && !singleConnectionFallback
+    val nextUrlIndex = urlIndex + 1
+    if (!retrySingleConnection && nextUrlIndex !in downloadUrls.indices) return null
+
+    return copy(
+        status = UpdateDownloadStatus.Queued,
+        urlIndex = if (retrySingleConnection) urlIndex else nextUrlIndex,
+        gopeedTaskId = null,
+        downloadedBytes = 0L,
+        speedBytesPerSecond = 0L,
+        singleConnectionFallback = retrySingleConnection,
+        verifiedVersionCode = null,
+        errorMessage = null,
+    )
 }
 
 internal object UpdateDownloadStore {

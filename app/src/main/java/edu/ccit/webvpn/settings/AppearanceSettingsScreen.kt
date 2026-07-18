@@ -1,9 +1,6 @@
 package edu.ccit.webvpn.settings
 
 import android.os.Build
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -36,13 +34,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,7 +50,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
@@ -173,44 +169,42 @@ private fun SettingsHomeScreen(
     onUpdate: () -> Unit,
 ) {
     val themeTitle = stringResource(R.string.settings_theme_title)
-    val themeSummary = stringResource(R.string.settings_theme_summary)
     val uiTitle = stringResource(R.string.settings_ui_title)
-    val uiSummary = stringResource(R.string.settings_ui_summary)
     SettingsScaffold(title = stringResource(R.string.settings_title), onBack = onBack) { padding ->
         SegmentedTextPrefsScreen(contentPadding = padding) {
             group(verticalPadding = 6.dp) {
                 preference(
                     onClick = onTheme,
                     title = themeTitle,
-                    summary = themeSummary,
+                    summary = "动态配色、预设色与自定义颜色",
                     icon = Icons.Outlined.Palette,
                     trailingIcon = Icons.AutoMirrored.Rounded.Label,
                 )
                 preference(
                     onClick = onUi,
                     title = uiTitle,
-                    summary = uiSummary,
+                    summary = "深色模式、底部导航和动效",
                     icon = Icons.Outlined.Tune,
                     trailingIcon = Icons.Outlined.Style,
                 )
                 preference(
                     onClick = onRss,
                     title = "RSS 订阅",
-                    summary = "分别管理公众号和校内新闻的 RSS 来源",
+                    summary = "管理公众号与校内新闻源",
                     icon = Icons.Outlined.RssFeed,
                     trailingIcon = Icons.Outlined.Tune,
                 )
                 preference(
                     onClick = onTieba,
                     title = "贴吧设置",
-                    summary = "主页贴吧、阅读偏好、自动签到与最近结果",
+                    summary = "主页、阅读、签到与最近结果",
                     icon = Icons.Outlined.Forum,
                     trailingIcon = Icons.Outlined.Tune,
                 )
                 preference(
                     onClick = onUpdate,
                     title = "更新",
-                    summary = "版本、预览版与 GitHub 加速",
+                    summary = "版本、下载与 GitHub 加速",
                     icon = Icons.Outlined.SystemUpdate,
                     trailingIcon = Icons.Outlined.Tune,
                 )
@@ -305,12 +299,18 @@ private fun ThemePaletteGrid(
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxWidth().height(326.dp),
+        modifier = Modifier.fillMaxWidth().height(318.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         userScrollEnabled = false,
     ) {
-        items(ThemeOptions, key = { it.first.name }) { (theme, label) ->
+        items(
+            items = ThemeOptions,
+            key = { it.first.name },
+            span = { (theme, _) ->
+                if (theme == Theme.CUSTOM) GridItemSpan(maxLineSpan) else GridItemSpan(1)
+            },
+        ) { (theme, label) ->
             val picked = theme == selected
             val preview = when (theme) {
                 Theme.DYNAMIC -> MaterialTheme.colorScheme.primary to MaterialTheme.colorScheme.secondary
@@ -325,8 +325,7 @@ private fun ThemePaletteGrid(
                 onClick = { onSelect(theme) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (picked) 78.dp else 72.dp)
-                    .animateContentSize(spring(stiffness = Spring.StiffnessLow)),
+                    .height(72.dp),
                 shape = MaterialTheme.shapes.large,
                 color = if (picked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(
@@ -436,23 +435,17 @@ private fun SettingsScaffold(
     onBack: () -> Unit,
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
-        modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text(title) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.action_back))
                     }
                 },
-                scrollBehavior = scrollBehavior,
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.01f),
-                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
             )
         },
     ) { inner ->

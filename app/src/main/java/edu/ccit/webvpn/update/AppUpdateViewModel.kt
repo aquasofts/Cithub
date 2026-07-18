@@ -35,9 +35,14 @@ internal sealed interface AppUpdateUiState {
         val progress: Float?,
         val speedBytesPerSecond: Long,
         val connections: Int,
+        val singleConnectionFallback: Boolean,
     ) : AppUpdateUiState
     data class Ready(val release: AppRelease, val apk: VerifiedUpdateApk) : AppUpdateUiState
-    data class Failed(val release: AppRelease, val message: String) : AppUpdateUiState
+    data class Failed(
+        val release: AppRelease,
+        val message: String,
+        val customDownload: Boolean = false,
+    ) : AppUpdateUiState
 }
 
 sealed interface ManualUpdateCheckResult {
@@ -75,24 +80,61 @@ class AppUpdateViewModel @Inject constructor(
         mutableState.value = AppUpdateUiState.Hidden
     }
 
-    internal fun startDownload(release: AppRelease) {
+    internal fun startDownload(release: AppRelease) = startDownload(release, customDownload = false)
+
+    internal fun startCustomDownload(rawUrl: String) {
+        val url = normalizeCustomUpdateUrl(rawUrl)
+        val currentVersion = SemanticVersion.parse(BuildConfig.VERSION_NAME)
+        if (url == null || currentVersion == null) {
+            mutableManualResults.tryEmit(ManualUpdateCheckResult.Failed("请输入有效的 HTTPS 下载链接"))
+            return
+        }
+        startDownload(
+            release = AppRelease(
+                version = currentVersion,
+                tagName = "custom-download",
+                title = "自定义更新",
+                notes = "通过设置中的自定义 HTTPS 链接下载",
+                pageUrl = url,
+                asset = UpdateAsset(customUpdateFileName(url), 0L, url),
+                prerelease = false,
+            ),
+            customDownload = true,
+        )
+    }
+
+    private fun startDownload(release: AppRelease, customDownload: Boolean) {
         val asset = release.asset
         if (asset == null) {
-            mutableState.value = AppUpdateUiState.Failed(release, "这个 Release 没有与当前 Full/Lite 版本匹配的 APK")
+            mutableState.value = AppUpdateUiState.Failed(
+                release,
+                "这个 Release 没有与当前 Full/Lite 版本匹配的 APK",
+                customDownload,
+            )
             return
         }
         if (mutableState.value is AppUpdateUiState.Downloading) return
 
         viewModelScope.launch {
             runCatching {
-                val accelerators = updateSettings.snapshot().githubAccelerators
-                val urls = githubUrlCandidates(asset.downloadUrl, accelerators)
+                val settings = updateSettings.snapshot()
+                val urls = if (customDownload) {
+                    listOf(asset.downloadUrl)
+                } else {
+                    githubUrlCandidates(asset.downloadUrl, settings.githubAccelerators)
+                }
                 require(urls.all { url ->
                     val parsed = url.toHttpUrlOrNull()
                     parsed != null && parsed.isHttps
                 }) { "Release APK 下载地址无效" }
                 val destination = UpdateInstaller.destinationFile(context, asset.name)
-                val record = UpdateDownloadRecord.create(destination, release, urls)
+                val record = UpdateDownloadRecord.create(
+                    destination = destination,
+                    release = release,
+                    downloadUrls = urls,
+                    connections = settings.downloadConnections,
+                    customDownload = customDownload,
+                )
                 withContext(Dispatchers.IO) { UpdateDownloadStore.write(context, record) }
                 record
             }.onSuccess { record ->
@@ -103,6 +145,7 @@ class AppUpdateViewModel @Inject constructor(
                 mutableState.value = AppUpdateUiState.Failed(
                     release,
                     error.message ?: "无法开始下载安装包",
+                    customDownload,
                 )
             }
         }
@@ -114,7 +157,11 @@ class AppUpdateViewModel @Inject constructor(
             return
         }
         downloadMonitorJob?.cancel()
-        mutableState.value = AppUpdateUiState.Available(record.toRelease())
+        mutableState.value = if (record.customDownload) {
+            AppUpdateUiState.Hidden
+        } else {
+            AppUpdateUiState.Available(record.toRelease())
+        }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 UpdateDownloadStore.write(
@@ -129,8 +176,8 @@ class AppUpdateViewModel @Inject constructor(
         }
     }
 
-    internal fun retry(release: AppRelease) {
-        startDownload(release)
+    internal fun retry(release: AppRelease, customDownload: Boolean) {
+        startDownload(release, customDownload)
     }
 
     fun checkNow() {
@@ -182,6 +229,7 @@ class AppUpdateViewModel @Inject constructor(
                 mutableState.value = AppUpdateUiState.Failed(
                     record.toRelease(),
                     record.errorMessage ?: "下载失败",
+                    record.customDownload,
                 )
             }
             UpdateDownloadStatus.Cancelled -> {
@@ -230,7 +278,11 @@ class AppUpdateViewModel @Inject constructor(
             while (true) {
                 val record = withContext(Dispatchers.IO) { UpdateDownloadStore.read(context) }
                 if (record == null) {
-                    mutableState.value = AppUpdateUiState.Available(release)
+                    mutableState.value = if (initial.customDownload) {
+                        AppUpdateUiState.Hidden
+                    } else {
+                        AppUpdateUiState.Available(release)
+                    }
                     return@launch
                 }
                 release = record.toRelease()
@@ -243,7 +295,11 @@ class AppUpdateViewModel @Inject constructor(
                         if (apk != null && File(apk.path).isFile) {
                             mutableState.value = AppUpdateUiState.Ready(release, apk)
                         } else {
-                            mutableState.value = AppUpdateUiState.Failed(release, "下载的安装包不存在")
+                            mutableState.value = AppUpdateUiState.Failed(
+                                release,
+                                "下载的安装包不存在",
+                                record.customDownload,
+                            )
                         }
                         return@launch
                     }
@@ -251,11 +307,16 @@ class AppUpdateViewModel @Inject constructor(
                         mutableState.value = AppUpdateUiState.Failed(
                             release,
                             record.errorMessage ?: "下载失败",
+                            record.customDownload,
                         )
                         return@launch
                     }
                     UpdateDownloadStatus.Cancelled -> {
-                        mutableState.value = AppUpdateUiState.Available(release)
+                        mutableState.value = if (record.customDownload) {
+                            AppUpdateUiState.Hidden
+                        } else {
+                            AppUpdateUiState.Available(release)
+                        }
                         return@launch
                     }
                 }
@@ -274,5 +335,6 @@ private fun UpdateDownloadRecord.toDownloadingState(): AppUpdateUiState.Download
             null
         },
         speedBytesPerSecond = speedBytesPerSecond,
-        connections = connections,
+        connections = activeConnections,
+        singleConnectionFallback = singleConnectionFallback,
     )

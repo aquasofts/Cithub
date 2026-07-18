@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -20,7 +22,9 @@ import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,9 +42,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,6 +56,7 @@ import edu.ccit.webvpn.BuildConfig
 import edu.ccit.webvpn.update.AcceleratorAvailability
 import edu.ccit.webvpn.update.AppUpdateViewModel
 import edu.ccit.webvpn.update.ManualUpdateCheckResult
+import edu.ccit.webvpn.update.normalizeCustomUpdateUrl
 import java.net.URI
 import kotlinx.coroutines.flow.collectLatest
 
@@ -63,14 +72,27 @@ internal fun UpdateSettingsScreen(
 ) {
     var current by remember(initial) { mutableStateOf(initial) }
     var editor by remember { mutableStateOf<AcceleratorEditor?>(null) }
+    var showConnectionsEditor by remember { mutableStateOf(false) }
+    var customUrl by rememberSaveable { mutableStateOf("") }
+    var customUrlError by rememberSaveable { mutableStateOf<String?>(null) }
     val checking by updateViewModel.manualChecking.collectAsStateWithLifecycle()
     val acceleratorAvailability by updateViewModel.acceleratorAvailability.collectAsStateWithLifecycle()
     val checkingAccelerators = acceleratorAvailability.values.any { it == AcceleratorAvailability.Checking }
     val snackbar = remember { SnackbarHostState() }
+    val focusManager = LocalFocusManager.current
 
     fun persist(value: UpdateSettings) {
         current = value
         settings.set(value)
+    }
+
+    fun startCustomDownload() {
+        val normalized = normalizeCustomUpdateUrl(customUrl)
+        customUrlError = if (normalized == null) "请输入有效的 HTTPS 下载链接" else null
+        if (normalized != null) {
+            focusManager.clearFocus()
+            updateViewModel.startCustomDownload(normalized)
+        }
     }
 
     LaunchedEffect(updateViewModel) {
@@ -115,39 +137,113 @@ internal fun UpdateSettingsScreen(
                 end = 16.dp,
                 bottom = padding.calculateBottomPadding() + 24.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(key = "version-header") { SettingsSectionHeader("版本与更新") }
             item(key = "version") {
                 OutlinedCard(Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("当前版本", modifier = Modifier.weight(1f))
-                        Text(BuildConfig.VERSION_NAME, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                            Text("当前版本", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                BuildConfig.VERSION_NAME,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        HorizontalDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { persist(current.copy(previewReleases = !current.previewReleases)) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("预览版试用", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "同时检查 GitHub Pre-release",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Switch(checked = current.previewReleases, onCheckedChange = null)
+                        }
                     }
                 }
             }
-            item(key = "preview") {
+
+            item(key = "download-header") { SettingsSectionHeader("下载") }
+            item(key = "connections") {
                 OutlinedCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            persist(current.copy(previewReleases = !current.previewReleases))
-                        },
+                        .clickable { showConnectionsEditor = true },
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("预览版试用", modifier = Modifier.weight(1f))
-                        Switch(checked = current.previewReleases, onCheckedChange = null)
+                        Column(Modifier.weight(1f)) {
+                            Text("下载线程数", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "分片失败会自动回退单连接",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Text(
+                            "${current.downloadConnections}",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
                     }
                 }
             }
+            item(key = "custom-download") {
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Column {
+                            Text("自定义 APK 下载", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "输入完整 HTTPS 链接，使用相同的分片与安全校验",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        OutlinedTextField(
+                            value = customUrl,
+                            onValueChange = {
+                                customUrl = it
+                                customUrlError = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("APK 下载链接") },
+                            placeholder = { Text("https://example.com/Cithub.apk") },
+                            supportingText = customUrlError?.let { message -> ({ Text(message) }) },
+                            isError = customUrlError != null,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Uri,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(onDone = { startCustomDownload() }),
+                        )
+                        Button(
+                            onClick = { startCustomDownload() },
+                            modifier = Modifier.align(Alignment.End),
+                            enabled = customUrl.isNotBlank(),
+                        ) { Text("开始下载") }
+                    }
+                }
+            }
+
             item(key = "accelerator-header") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("GitHub 加速", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    SettingsSectionHeader("GitHub 加速", Modifier.weight(1f))
                     TextButton(
                         onClick = { updateViewModel.checkAccelerators(current.githubAccelerators) },
                         enabled = current.githubAccelerators.isNotEmpty() && !checkingAccelerators,
@@ -163,7 +259,13 @@ internal fun UpdateSettingsScreen(
             }
             if (current.githubAccelerators.isEmpty()) {
                 item(key = "accelerator-empty") {
-                    Text("未配置", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedCard(Modifier.fillMaxWidth()) {
+                        Text(
+                            "未配置，将直接连接 GitHub",
+                            modifier = Modifier.padding(16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             } else {
                 itemsIndexed(
@@ -171,51 +273,64 @@ internal fun UpdateSettingsScreen(
                     key = { _, url -> url },
                 ) { index, url ->
                     OutlinedCard(Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 4.dp),
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = acceleratorDisplayName(url),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                            Text(
+                                text = acceleratorDisplayName(url),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = acceleratorAvailability[url].displayText(),
+                                    modifier = Modifier.weight(1f),
                                     color = acceleratorAvailability[url].displayColor(),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
+                                IconButton(
+                                    onClick = {
+                                        persist(current.copy(githubAccelerators = current.githubAccelerators.move(index, index - 1)))
+                                    },
+                                    enabled = index > 0,
+                                ) { Icon(Icons.Outlined.ArrowUpward, contentDescription = "提高优先级") }
+                                IconButton(
+                                    onClick = {
+                                        persist(current.copy(githubAccelerators = current.githubAccelerators.move(index, index + 1)))
+                                    },
+                                    enabled = index < current.githubAccelerators.lastIndex,
+                                ) { Icon(Icons.Outlined.ArrowDownward, contentDescription = "降低优先级") }
+                                IconButton(onClick = { editor = AcceleratorEditor(index, url) }) {
+                                    Icon(Icons.Outlined.Edit, contentDescription = "编辑")
+                                }
+                                IconButton(
+                                    onClick = {
+                                        persist(
+                                            current.copy(
+                                                githubAccelerators = current.githubAccelerators.filterIndexed { item, _ ->
+                                                    item != index
+                                                },
+                                            ),
+                                        )
+                                    },
+                                ) { Icon(Icons.Outlined.Delete, contentDescription = "删除") }
                             }
-                            IconButton(
-                                onClick = {
-                                    persist(current.copy(githubAccelerators = current.githubAccelerators.move(index, index - 1)))
-                                },
-                                enabled = index > 0,
-                            ) { Icon(Icons.Outlined.ArrowUpward, contentDescription = "提高优先级") }
-                            IconButton(
-                                onClick = {
-                                    persist(current.copy(githubAccelerators = current.githubAccelerators.move(index, index + 1)))
-                                },
-                                enabled = index < current.githubAccelerators.lastIndex,
-                            ) { Icon(Icons.Outlined.ArrowDownward, contentDescription = "降低优先级") }
-                            IconButton(onClick = { editor = AcceleratorEditor(index, url) }) {
-                                Icon(Icons.Outlined.Edit, contentDescription = "编辑")
-                            }
-                            IconButton(
-                                onClick = {
-                                    persist(
-                                        current.copy(
-                                            githubAccelerators = current.githubAccelerators.filterIndexed { item, _ -> item != index },
-                                        ),
-                                    )
-                                },
-                            ) { Icon(Icons.Outlined.Delete, contentDescription = "删除") }
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showConnectionsEditor) {
+        DownloadConnectionsDialog(
+            initial = current.downloadConnections,
+            onDismiss = { showConnectionsEditor = false },
+            onConfirm = { connections ->
+                persist(current.copy(downloadConnections = connections))
+                showConnectionsEditor = false
+            },
+        )
     }
 
     editor?.let { editing ->
@@ -235,6 +350,66 @@ internal fun UpdateSettingsScreen(
             },
         )
     }
+}
+
+@Composable
+private fun SettingsSectionHeader(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        modifier = modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+        color = MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.titleSmall,
+    )
+}
+
+@Composable
+private fun DownloadConnectionsDialog(
+    initial: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var value by remember(initial) { mutableStateOf(initial.toString()) }
+    var error by remember(initial) { mutableStateOf<String?>(null) }
+    val focusManager = LocalFocusManager.current
+
+    fun confirm() {
+        val parsed = value.toIntOrNull()
+        error = if (parsed == null || parsed !in MinUpdateDownloadConnections..MaxUpdateDownloadConnections) {
+            "请输入 $MinUpdateDownloadConnections–$MaxUpdateDownloadConnections 之间的整数"
+        } else {
+            null
+        }
+        if (error == null) {
+            focusManager.clearFocus()
+            onConfirm(requireNotNull(parsed))
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("设置下载线程数") },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = {
+                    value = it.filter(Char::isDigit).take(2)
+                    error = null
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("线程数") },
+                supportingText = { Text(error ?: "默认 16；分片失败后自动回退为 1") },
+                isError = error != null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { confirm() }),
+            )
+        },
+        confirmButton = { TextButton(onClick = { confirm() }) { Text("保存") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -262,6 +437,7 @@ private fun AcceleratorDialog(
                 supportingText = error?.let { message -> ({ Text(message) }) },
                 isError = error != null,
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             )
         },
         confirmButton = {

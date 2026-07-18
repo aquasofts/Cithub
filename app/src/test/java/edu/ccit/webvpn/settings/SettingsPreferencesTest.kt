@@ -1,6 +1,7 @@
 package edu.ccit.webvpn.settings
 
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -65,6 +66,7 @@ class SettingsPreferencesTest {
         val update = UpdateSettings(
             previewReleases = true,
             githubAccelerators = listOf("https://mirror-a.example", "https://mirror-b.example/proxy"),
+            downloadConnections = 32,
         )
 
         writeThemeSettings(preferences, theme)
@@ -105,6 +107,7 @@ class SettingsPreferencesTest {
             listOf("https://ghproxy.net", "https://gh-proxy.org"),
             readUpdateSettings(emptyPreferences()).githubAccelerators,
         )
+        assertEquals(16, readUpdateSettings(emptyPreferences()).downloadConnections)
         assertEquals("https://mirror.example/proxy", normalizeGithubAccelerator(" https://mirror.example/proxy/ "))
         assertEquals(null, normalizeGithubAccelerator("http://mirror.example"))
         assertEquals(null, normalizeGithubAccelerator("https://user@mirror.example"))
@@ -117,5 +120,14 @@ class SettingsPreferencesTest {
         writeUpdateSettings(preferences, UpdateSettings(githubAccelerators = emptyList()))
 
         assertEquals(emptyList<String>(), readUpdateSettings(preferences).githubAccelerators)
+    }
+
+    @Test
+    fun updateConnectionCountIsClampedToSupportedRange() {
+        val tooLow = mutablePreferencesOf(intPreferencesKey("update_download_connections") to 0)
+        val tooHigh = mutablePreferencesOf(intPreferencesKey("update_download_connections") to 100)
+
+        assertEquals(MinUpdateDownloadConnections, readUpdateSettings(tooLow).downloadConnections)
+        assertEquals(MaxUpdateDownloadConnections, readUpdateSettings(tooHigh).downloadConnections)
     }
 }

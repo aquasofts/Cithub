@@ -200,6 +200,24 @@ class AppUpdateModelsTest {
         )
     }
 
+    @Test
+    fun customUpdateUrlsRequireHttpsAndKeepApkNames() {
+        assertEquals(
+            "https://downloads.example/Cithub-2.2.2.apk?token=abc",
+            normalizeCustomUpdateUrl(" https://downloads.example/Cithub-2.2.2.apk?token=abc "),
+        )
+        assertNull(normalizeCustomUpdateUrl("http://downloads.example/Cithub.apk"))
+        assertNull(normalizeCustomUpdateUrl("https://user:secret@downloads.example/Cithub.apk"))
+        assertEquals(
+            "Cithub-2.2.2.apk",
+            customUpdateFileName("https://downloads.example/Cithub-2.2.2.apk?token=abc"),
+        )
+        assertEquals(
+            "Cithub-custom-update.apk",
+            customUpdateFileName("https://downloads.example/latest"),
+        )
+    }
+
     private fun asset(name: String) = GitHubAssetDto(
         name = name,
         size = 1_024,

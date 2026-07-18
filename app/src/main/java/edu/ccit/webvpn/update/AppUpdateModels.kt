@@ -2,6 +2,7 @@ package edu.ccit.webvpn.update
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal const val CITHUB_RELEASES_API =
     "https://api.github.com/repos/aquasofts/Cithub/releases?per_page=20"
@@ -107,6 +108,19 @@ internal fun GitHubReleaseDto.toAppRelease(flavor: UpdateFlavor): AppRelease? {
 
 internal fun githubUrlCandidates(originalUrl: String, accelerators: List<String>): List<String> =
     (accelerators.map { accelerator -> "${accelerator.trimEnd('/')}/$originalUrl" } + originalUrl).distinct()
+
+internal fun normalizeCustomUpdateUrl(raw: String): String? {
+    val url = raw.trim().toHttpUrlOrNull() ?: return null
+    return url.takeIf {
+        it.isHttps && it.username.isBlank() && it.password.isBlank()
+    }?.toString()
+}
+
+internal fun customUpdateFileName(url: String): String = url.toHttpUrlOrNull()
+    ?.pathSegments
+    ?.lastOrNull()
+    ?.takeIf { it.endsWith(".apk", ignoreCase = true) }
+    ?: "Cithub-custom-update.apk"
 
 internal fun selectAsset(
     assets: List<GitHubAssetDto>,

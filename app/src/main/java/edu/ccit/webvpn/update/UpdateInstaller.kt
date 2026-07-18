@@ -16,6 +16,7 @@ import java.security.MessageDigest
 internal data class VerifiedUpdateApk(
     val path: String,
     val versionCode: Long,
+    val version: SemanticVersion,
 )
 
 internal class UpdateVerificationException(message: String) : Exception(message)
@@ -44,6 +45,7 @@ internal object UpdateInstaller {
         apk: File,
         release: AppRelease,
         flavor: UpdateFlavor,
+        verifyReleaseVersion: Boolean = true,
     ): VerifiedUpdateApk {
         if (!apk.isFile || apk.length() <= 0L) {
             throw UpdateVerificationException("下载的安装包不存在或为空")
@@ -59,7 +61,9 @@ internal object UpdateInstaller {
         }
 
         val archiveVersionName = archive.versionName.orEmpty()
-        if (SemanticVersion.parse(archiveVersionName) != release.version) {
+        val archiveVersion = SemanticVersion.parse(archiveVersionName)
+            ?: throw UpdateVerificationException("安装包版本格式无效")
+        if (verifyReleaseVersion && archiveVersion != release.version) {
             throw UpdateVerificationException("安装包版本与 Release ${release.tagName} 不匹配")
         }
         val flavorMatches = when (flavor) {
@@ -79,7 +83,7 @@ internal object UpdateInstaller {
             throw UpdateVerificationException("安装包签名不兼容，需卸载后安装")
         }
 
-        return VerifiedUpdateApk(apk.absolutePath, archiveVersionCode)
+        return VerifiedUpdateApk(apk.absolutePath, archiveVersionCode, archiveVersion)
     }
 
     fun canRequestInstalls(context: Context): Boolean =

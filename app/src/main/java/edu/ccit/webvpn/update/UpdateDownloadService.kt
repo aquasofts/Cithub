@@ -170,6 +170,7 @@ internal class UpdateDownloadService : Service() {
                             apk = File(record.destinationPath),
                             release = record.toRelease(),
                             flavor = updateFlavor(BuildConfig.FLAVOR),
+                            verifyReleaseVersion = !record.customDownload,
                         )
                     }
                     val apk = verified.getOrNull()
@@ -177,6 +178,7 @@ internal class UpdateDownloadService : Service() {
                         runCatching { client.deleteTask(taskId, force = false) }
                         val ready = record.copy(
                             status = UpdateDownloadStatus.Ready,
+                            version = apk.version.toString(),
                             gopeedTaskId = null,
                             downloadedBytes = File(record.destinationPath).length(),
                             speedBytesPerSecond = 0L,
@@ -224,7 +226,7 @@ internal class UpdateDownloadService : Service() {
                 url = record.currentUrl,
                 destinationDirectory = requireNotNull(destination.parentFile),
                 fileName = destination.name,
-                connections = record.connections,
+                connections = record.activeConnections,
                 userAgent = "Cithub/${BuildConfig.VERSION_NAME} (Android)",
             )
         }
@@ -263,17 +265,8 @@ internal class UpdateDownloadService : Service() {
         message: String,
     ): UpdateDownloadRecord? {
         deleteTaskAndFile(client, record)
-        val nextIndex = record.urlIndex + 1
-        if (nextIndex < record.downloadUrls.size) {
-            return record.copy(
-                status = UpdateDownloadStatus.Queued,
-                urlIndex = nextIndex,
-                gopeedTaskId = null,
-                downloadedBytes = 0L,
-                speedBytesPerSecond = 0L,
-                verifiedVersionCode = null,
-                errorMessage = null,
-            ).also {
+        record.nextDownloadAttempt()?.let { next ->
+            return next.also {
                 UpdateDownloadStore.write(this, it)
                 updateForeground(it)
             }
@@ -326,11 +319,15 @@ internal class UpdateDownloadService : Service() {
         val progress = record?.progressPercent()
         return NotificationCompat.Builder(this, NotificationChannelId)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(record?.let { "正在下载 Cithub ${it.version}" } ?: "正在准备更新下载")
+            .setContentTitle(
+                record?.let { if (it.customDownload) "正在下载自定义更新" else "正在下载 Cithub ${it.version}" }
+                    ?: "正在准备更新下载",
+            )
             .setContentText(
                 record?.speedBytesPerSecond?.takeIf { it > 0L }
-                    ?.let { "Gopeed 分片下载 · ${formatNotificationSize(it)}/s" }
-                    ?: "Gopeed 分片下载",
+                    ?.let { "${record.connectionModeLabel()} · ${formatNotificationSize(it)}/s" }
+                    ?: record?.connectionModeLabel()
+                    ?: "Gopeed 下载",
             )
             .setContentIntent(appPendingIntent())
             .setOnlyAlertOnce(true)
@@ -450,6 +447,9 @@ private fun UpdateDownloadRecord.progressPercent(): Int? {
         .coerceIn(0L, 100L)
         .toInt()
 }
+
+private fun UpdateDownloadRecord.connectionModeLabel(): String =
+    if (singleConnectionFallback) "Gopeed 单连接回退" else "Gopeed · $activeConnections 连接"
 
 private fun formatNotificationSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))

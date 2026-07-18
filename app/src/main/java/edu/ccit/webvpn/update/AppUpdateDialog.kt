@@ -96,7 +96,15 @@ internal fun AppUpdateHost(
         is AppUpdateUiState.Downloading -> {
             AlertDialog(
                 onDismissRequest = {},
-                title = { Text("正在下载 ${current.release.version}") },
+                title = {
+                    Text(
+                        if (current.release.tagName == "custom-download") {
+                            "正在下载自定义更新"
+                        } else {
+                            "正在下载 ${current.release.version}"
+                        },
+                    )
+                },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         val progress = current.progress
@@ -110,7 +118,11 @@ internal fun AppUpdateHost(
                             Text("已下载 ${(progress * 100).toInt()}%")
                         }
                         Text(
-                            "Gopeed · 最多 ${current.connections} 连接" +
+                            (if (current.singleConnectionFallback) {
+                                "Gopeed · 已自动回退单连接"
+                            } else {
+                                "Gopeed · ${current.connections} 连接"
+                            }) +
                                 current.speedBytesPerSecond.takeIf { it > 0L }
                                     ?.let { speed -> " · ${formatSize(speed)}/s" }
                                     .orEmpty(),
@@ -161,14 +173,20 @@ internal fun AppUpdateHost(
                 title = { Text("更新未完成") },
                 text = { Text(current.message) },
                 confirmButton = {
-                    TextButton(onClick = { updateViewModel.retry(current.release) }) { Text("重试") }
+                    TextButton(
+                        onClick = { updateViewModel.retry(current.release, current.customDownload) },
+                    ) { Text("重试") }
                 },
                 dismissButton = {
-                    TextButton(
-                        onClick = {
-                            uriHandler.openUri(current.release.pageUrl)
-                        },
-                    ) { Text("查看 Release") }
+                    if (current.customDownload) {
+                        TextButton(onClick = updateViewModel::dismiss) { Text("关闭") }
+                    } else {
+                        TextButton(
+                            onClick = {
+                                uriHandler.openUri(current.release.pageUrl)
+                            },
+                        ) { Text("查看 Release") }
+                    }
                 },
             )
         }
