@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.31`
-- Version code: `37`
+- Version name: `2.1.32`
+- Version code: `38`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.1.32 (versionCode 38) — 2026-07-18
+
+- Changed Tieba thread bodies to render every image in a floor inline instead of showing only one image at a time in an embedded pager.
+- Fixed the original-image viewer so unzoomed horizontal drags switch between all images in the floor; zoomed images continue to own pan gestures.
 
 ### 2.1.31 (versionCode 37) — 2026-07-18
 

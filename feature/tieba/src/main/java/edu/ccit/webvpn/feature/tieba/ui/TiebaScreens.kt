@@ -1693,7 +1693,7 @@ private fun TiebaContentBody(
         blocks.forEach { block ->
             val images = block.filterIsInstance<TiebaContent.Image>()
             if (images.size == block.size && images.isNotEmpty()) {
-                TiebaImageCarousel(
+                TiebaImageGallery(
                     images = images,
                     floorPicItems = floorPicItems,
                     floorStartIndex = floorImageIndex,
@@ -1717,9 +1717,8 @@ private fun TiebaContentBody(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TiebaImageCarousel(
+private fun TiebaImageGallery(
     images: List<TiebaContent.Image>,
     floorPicItems: List<PicItem>,
     floorStartIndex: Int,
@@ -1727,55 +1726,53 @@ private fun TiebaImageCarousel(
 ) {
     val context = LocalContext.current
     val runtime = remember(context) { TiebaRuntime.get(context) }
-    val pagerState = rememberPagerState(pageCount = { images.size })
-    val currentImage = images[pagerState.currentPage.coerceIn(images.indices)]
-    val ratio = if (currentImage.width != null && currentImage.height != null && currentImage.height > 0) {
-        (currentImage.width.toFloat() / currentImage.height).coerceIn(0.65f, 2.2f)
-    } else {
-        4f / 3f
-    }
-    Box(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 96.dp, max = 520.dp)
-            .aspectRatio(ratio)
-            .clip(MaterialTheme.shapes.small),
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize().clipToBounds(),
-            key = { page -> "${floorPicItems[floorStartIndex + page].picId}:$page" },
-            beyondViewportPageCount = 1,
-        ) { page ->
+        images.forEachIndexed { page, image ->
             val floorIndex = floorStartIndex + page
             val item = floorPicItems[floorIndex]
             val photoData = PhotoViewData(picItems = floorPicItems, index = floorIndex)
             val saveAction = rememberTiebaImageSaveAction(runtime, item)
-            ImageSaveContextMenu(
-                modifier = Modifier.fillMaxSize(),
-                onClick = { onImage(photoData) },
-                onSave = saveAction.save,
-                saveEnabled = !saveAction.saving,
-            ) {
-                TiebaAsyncImage(
-                    url = images[page].previewUrl,
-                    contentDescription = "帖子图片 ${page + 1}/${images.size}",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
-                )
+            val ratio = if (image.width != null && image.height != null && image.height > 0) {
+                (image.width.toFloat() / image.height).coerceIn(0.65f, 2.2f)
+            } else {
+                4f / 3f
             }
-        }
-        if (images.size > 1) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                color = Color(0x99000000),
-                contentColor = Color.White,
-                shape = MaterialTheme.shapes.extraSmall,
+            Box(
+                Modifier.fillMaxWidth()
+                    .heightIn(min = 96.dp, max = 520.dp)
+                    .aspectRatio(ratio)
+                    .clip(MaterialTheme.shapes.small),
             ) {
-                Text(
-                    "${pagerState.currentPage + 1}/${images.size}",
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                )
+                ImageSaveContextMenu(
+                    modifier = Modifier.fillMaxSize(),
+                    onClick = { onImage(photoData) },
+                    onSave = saveAction.save,
+                    saveEnabled = !saveAction.saving,
+                ) {
+                    TiebaAsyncImage(
+                        url = image.previewUrl,
+                        contentDescription = "帖子图片 ${floorIndex + 1}/${floorPicItems.size}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+                if (floorPicItems.size > 1) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                        color = Color(0x99000000),
+                        contentColor = Color.White,
+                        shape = MaterialTheme.shapes.extraSmall,
+                    ) {
+                        Text(
+                            "${floorIndex + 1}/${floorPicItems.size}",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
             }
         }
     }
@@ -2471,7 +2468,10 @@ private fun FullImagePage(
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         request?.let { originalRequest ->
             ImageSaveContextMenu(
-                modifier = Modifier.fillMaxSize().transformable(transform),
+                modifier = Modifier.fillMaxSize().transformable(
+                    state = transform,
+                    canPan = { shouldConsumeImagePan(scale) },
+                ),
                 onClick = {},
                 onSave = saveAction.save,
                 saveEnabled = resolvedUrl != null && !failed && !saveAction.saving,
@@ -2536,6 +2536,8 @@ private fun FullImagePage(
         }
     }
 }
+
+internal fun shouldConsumeImagePan(scale: Float): Boolean = scale > 1.01f
 
 @Composable
 fun TiebaAccountCard(onLogin: () -> Unit, modifier: Modifier = Modifier) {
