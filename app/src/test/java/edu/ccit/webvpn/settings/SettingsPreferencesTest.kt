@@ -101,8 +101,21 @@ class SettingsPreferencesTest {
     @Test
     fun updateSettingsDefaultToFormalAndNormalizeAccelerators() {
         assertEquals(UpdateSettings(), readUpdateSettings(emptyPreferences()))
+        assertEquals(
+            listOf("https://ghproxy.net", "https://gh-proxy.com"),
+            readUpdateSettings(emptyPreferences()).githubAccelerators,
+        )
         assertEquals("https://mirror.example/proxy", normalizeGithubAccelerator(" https://mirror.example/proxy/ "))
         assertEquals(null, normalizeGithubAccelerator("http://mirror.example"))
         assertEquals(null, normalizeGithubAccelerator("https://user@mirror.example"))
+    }
+
+    @Test
+    fun updateSettingsPreserveAnExplicitlyEmptyAcceleratorList() {
+        val preferences = mutablePreferencesOf()
+
+        writeUpdateSettings(preferences, UpdateSettings(githubAccelerators = emptyList()))
+
+        assertEquals(emptyList<String>(), readUpdateSettings(preferences).githubAccelerators)
     }
 }

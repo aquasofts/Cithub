@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import edu.ccit.webvpn.BuildConfig
+import edu.ccit.webvpn.update.AcceleratorAvailability
 import edu.ccit.webvpn.update.AppUpdateViewModel
 import edu.ccit.webvpn.update.ManualUpdateCheckResult
 import java.net.URI
@@ -63,6 +64,8 @@ internal fun UpdateSettingsScreen(
     var current by remember(initial) { mutableStateOf(initial) }
     var editor by remember { mutableStateOf<AcceleratorEditor?>(null) }
     val checking by updateViewModel.manualChecking.collectAsStateWithLifecycle()
+    val acceleratorAvailability by updateViewModel.acceleratorAvailability.collectAsStateWithLifecycle()
+    val checkingAccelerators = acceleratorAvailability.values.any { it == AcceleratorAvailability.Checking }
     val snackbar = remember { SnackbarHostState() }
 
     fun persist(value: UpdateSettings) {
@@ -79,6 +82,10 @@ internal fun UpdateSettingsScreen(
                 },
             )
         }
+    }
+
+    LaunchedEffect(updateViewModel) {
+        updateViewModel.checkAccelerators(current.githubAccelerators)
     }
 
     Scaffold(
@@ -141,6 +148,12 @@ internal fun UpdateSettingsScreen(
             item(key = "accelerator-header") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("GitHub 加速", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    TextButton(
+                        onClick = { updateViewModel.checkAccelerators(current.githubAccelerators) },
+                        enabled = current.githubAccelerators.isNotEmpty() && !checkingAccelerators,
+                    ) {
+                        Text(if (checkingAccelerators) "检测中" else "检测")
+                    }
                     TextButton(onClick = { editor = AcceleratorEditor() }) {
                         Icon(Icons.Outlined.Add, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
@@ -162,12 +175,18 @@ internal fun UpdateSettingsScreen(
                             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                text = acceleratorDisplayName(url),
-                                modifier = Modifier.weight(1f),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = acceleratorDisplayName(url),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = acceleratorAvailability[url].displayText(),
+                                    color = acceleratorAvailability[url].displayColor(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                             IconButton(
                                 onClick = {
                                     persist(current.copy(githubAccelerators = current.githubAccelerators.move(index, index - 1)))
@@ -211,6 +230,7 @@ internal fun UpdateSettingsScreen(
                     current.githubAccelerators.mapIndexed { index, old -> if (index == editing.index) url else old }
                 }
                 persist(current.copy(githubAccelerators = next))
+                updateViewModel.checkAccelerators(next)
                 editor = null
             },
         )
@@ -271,3 +291,17 @@ private fun List<String>.move(from: Int, to: Int): List<String> {
 private fun acceleratorDisplayName(url: String): String = runCatching {
     URI(url).let { uri -> uri.host + uri.rawPath.orEmpty() }
 }.getOrDefault(url)
+
+@Composable
+private fun AcceleratorAvailability?.displayColor() = when (this) {
+    is AcceleratorAvailability.Available -> MaterialTheme.colorScheme.primary
+    AcceleratorAvailability.Unavailable -> MaterialTheme.colorScheme.error
+    AcceleratorAvailability.Checking, null -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun AcceleratorAvailability?.displayText(): String = when (this) {
+    is AcceleratorAvailability.Available -> "可用 · ${latencyMillis} ms"
+    AcceleratorAvailability.Unavailable -> "不可用"
+    AcceleratorAvailability.Checking -> "检测中"
+    null -> "未检测"
+}

@@ -1,6 +1,7 @@
 package edu.ccit.webvpn.core.runtime
 
 import android.content.Context
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
@@ -87,6 +88,28 @@ class RuntimeLogTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun streamedExportWritesTheCompleteLogWithoutUsingClipboardText() = runBlocking {
+        val newestMarker = "latest-runtime-marker"
+        runtimeLog.info(
+            source = "runtime_test",
+            event = "large_export",
+            fields = mapOf(
+                "payload" to "x".repeat(512 * 1024),
+                "marker" to newestMarker,
+            ),
+        )
+        val output = ByteArrayOutputStream()
+
+        runtimeLog.writeTo(output)
+
+        val exported = output.toString(Charsets.UTF_8.name())
+        assertTrue(exported.startsWith("Cithub 运行日志"))
+        assertTrue(exported.contains(RuntimeLog.PRIVACY_WARNING))
+        assertTrue(exported.contains(newestMarker))
+        assertTrue(output.size() > 512 * 1024)
     }
 
     private fun loggedClient(): OkHttpClient = OkHttpClient.Builder()

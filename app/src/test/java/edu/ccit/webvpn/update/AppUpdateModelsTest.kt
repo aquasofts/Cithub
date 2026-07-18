@@ -148,6 +148,29 @@ class AppUpdateModelsTest {
     }
 
     @Test
+    fun acceleratorCheckerRequiresAValidGithubReleaseResponse() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody("[]"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("not-json"))
+        try {
+            val checker = GitHubAcceleratorChecker(
+                userAgent = "test",
+                probeUrl = "https://api.github.com/repos/aquasofts/Cithub/releases?per_page=1",
+            )
+            val accelerator = server.url("/proxy").toString().trimEnd('/')
+
+            assertTrue(checker.check(accelerator) is AcceleratorAvailability.Available)
+            assertEquals(AcceleratorAvailability.Unavailable, checker.check(accelerator))
+            assertEquals(
+                "/proxy/https://api.github.com/repos/aquasofts/Cithub/releases?per_page=1",
+                server.takeRequest().path,
+            )
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
     fun upgradeHousekeepingDetectsExistingInstallAndVersionIncrease() {
         assertTrue(
             shouldCleanUpgradeCaches(

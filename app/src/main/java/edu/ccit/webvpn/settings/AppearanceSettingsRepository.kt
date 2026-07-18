@@ -75,7 +75,12 @@ data class RssFeedSettings(
 @Immutable
 data class UpdateSettings(
     val previewReleases: Boolean = false,
-    val githubAccelerators: List<String> = emptyList(),
+    val githubAccelerators: List<String> = DefaultGithubAccelerators,
+)
+
+internal val DefaultGithubAccelerators = listOf(
+    "https://ghproxy.net",
+    "https://gh-proxy.com",
 )
 
 @Immutable
@@ -236,7 +241,7 @@ internal fun readUpdateSettings(preferences: Preferences): UpdateSettings = Upda
         ?.mapNotNull(::normalizeGithubAccelerator)
         ?.distinct()
         ?.toList()
-        .orEmpty(),
+        ?: DefaultGithubAccelerators,
 )
 
 internal fun writeUpdateSettings(

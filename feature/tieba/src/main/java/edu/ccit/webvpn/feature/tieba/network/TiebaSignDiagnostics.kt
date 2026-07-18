@@ -1,6 +1,7 @@
 package edu.ccit.webvpn.feature.tieba.network
 
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import edu.ccit.webvpn.core.runtime.RuntimeLog
 import edu.ccit.webvpn.feature.tieba.ForumSummary
@@ -102,6 +103,8 @@ internal class TiebaSignDiagnostics private constructor(context: Context) {
     }
 
     suspend fun exportText(): String = runtimeLog.exportText()
+
+    suspend fun saveTo(uri: Uri) = runtimeLog.saveTo(uri)
 
     suspend fun clear() = runtimeLog.clear()
 

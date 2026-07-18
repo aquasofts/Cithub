@@ -13,6 +13,10 @@ import edu.ccit.webvpn.BuildConfig
 import edu.ccit.webvpn.settings.SettingsRepository
 import java.io.File
 import javax.inject.Inject
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -58,6 +62,10 @@ class AppUpdateViewModel @Inject constructor(
     val manualChecking: StateFlow<Boolean> = mutableManualChecking.asStateFlow()
     private val mutableManualResults = MutableSharedFlow<ManualUpdateCheckResult>(extraBufferCapacity = 1)
     val manualResults: SharedFlow<ManualUpdateCheckResult> = mutableManualResults.asSharedFlow()
+    private val mutableAcceleratorAvailability = MutableStateFlow<Map<String, AcceleratorAvailability>>(emptyMap())
+    internal val acceleratorAvailability: StateFlow<Map<String, AcceleratorAvailability>> =
+        mutableAcceleratorAvailability.asStateFlow()
+    private var acceleratorCheckJob: Job? = null
 
     init {
         viewModelScope.launch { resumeDownloadOrCheck() }
@@ -110,6 +118,27 @@ class AppUpdateViewModel @Inject constructor(
     fun checkNow() {
         if (mutableManualChecking.value) return
         viewModelScope.launch { checkLatestInternal(manual = true) }
+    }
+
+    internal fun checkAccelerators(accelerators: List<String>) {
+        val candidates = accelerators.distinct()
+        acceleratorCheckJob?.cancel()
+        if (candidates.isEmpty()) {
+            mutableAcceleratorAvailability.value = emptyMap()
+            return
+        }
+
+        mutableAcceleratorAvailability.value = candidates.associateWith { AcceleratorAvailability.Checking }
+        acceleratorCheckJob = viewModelScope.launch {
+            val checker = GitHubAcceleratorChecker(
+                userAgent = "Cithub/${BuildConfig.VERSION_NAME} (Android)",
+            )
+            mutableAcceleratorAvailability.value = coroutineScope {
+                candidates.map { accelerator ->
+                    async { accelerator to checker.check(accelerator) }
+                }.awaitAll().toMap()
+            }
+        }
     }
 
     private suspend fun resumeDownloadOrCheck() {

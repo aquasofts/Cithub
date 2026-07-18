@@ -1,6 +1,7 @@
 package edu.ccit.webvpn.feature.tieba
 
 import android.content.Context
+import android.net.Uri
 import android.webkit.CookieManager
 import androidx.room.Room
 import coil3.ImageLoader
@@ -149,7 +150,7 @@ class TiebaRuntime private constructor(context: Context) {
         }
     }
 
-    suspend fun exportRuntimeLog(): String = signDiagnostics.exportText()
+    suspend fun saveRuntimeLog(uri: Uri) = signDiagnostics.saveTo(uri)
 
     suspend fun clearRuntimeLog() = signDiagnostics.clear()
 

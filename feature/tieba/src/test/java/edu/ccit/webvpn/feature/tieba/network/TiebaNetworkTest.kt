@@ -53,6 +53,7 @@ import okhttp3.RequestBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -188,9 +189,8 @@ class TiebaNetworkTest {
             floor = 2,
             time = 1_700_000_200,
             author_id = 5,
-            content = listOf(PbContent(type = 0, text = "高赞楼完整内容")),
+            content = listOf(PbContent(type = 0, text = "热门楼完整内容")),
             sub_post_number = 3,
-            is_wonderful_post = 1,
         )
         val metadataOnlyHotPost = HotPost(
             thread_id = 9,
@@ -198,7 +198,7 @@ class TiebaNetworkTest {
             user_name = "发帖人",
             user_id = 5,
             post_num = 2,
-            content = listOf(PbContent(type = 0, text = "高赞楼元数据内容")),
+            content = listOf(PbContent(type = 0, text = "热门楼元数据内容")),
             create_time = 1_700_000_300,
             floor = 8,
             portrait = "portrait",
@@ -219,12 +219,35 @@ class TiebaNetworkTest {
 
         assertEquals(listOf("13", "14", "12"), thread.floors.map { it.postId })
         assertEquals(listOf(2, 8, 2), thread.floors.map { it.floor })
-        assertEquals("高赞楼完整内容", thread.floors[0].content)
-        assertEquals("高赞楼元数据内容", thread.floors[1].content)
+        assertEquals("热门楼完整内容", thread.floors[0].content)
+        assertEquals("热门楼元数据内容", thread.floors[1].content)
         assertEquals(3, thread.floors[0].replyCount)
         assertEquals(2, thread.floors[1].replyCount)
-        assertTrue(thread.floors[0].isTopAgree)
-        assertTrue(thread.floors[1].isTopAgree)
+        assertFalse(thread.floors[0].isTopAgree)
+        assertFalse(thread.floors[1].isTopAgree)
+    }
+
+    @Test
+    fun repositoryDoesNotTreatRegularHotPostFlagAsHighlyLiked() = runBlocking {
+        val response = successThread().let { source ->
+            source.copy(
+                data_ = source.data_?.copy(
+                    post_list = source.data_?.post_list.orEmpty().map { post ->
+                        post.copy(
+                            is_top_agree_post = 0,
+                            is_hot_post = 1,
+                            is_wonderful_post = 0,
+                        )
+                    },
+                ),
+            )
+        }
+
+        val floor = repository(FakeTiebaReadApi(successForum(), response))
+            .loadThread("9", 1, FloorSort.ASCENDING, onlyOriginalPoster = false)
+            .floors.single()
+
+        assertFalse(floor.isTopAgree)
     }
 
     @Test

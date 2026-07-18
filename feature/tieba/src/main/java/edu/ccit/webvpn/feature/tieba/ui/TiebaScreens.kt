@@ -23,6 +23,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -68,8 +69,8 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Image
@@ -189,9 +190,11 @@ import edu.ccit.webvpn.feature.tieba.normalizeTiebaEmoticonId
 import edu.ccit.webvpn.feature.tieba.network.isAuthorizedTiebaImageUrl
 import edu.ccit.webvpn.feature.tieba.network.parseLoginCookies
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.serialization.Serializable
@@ -2690,6 +2693,18 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
     val account by runtime.account.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val logSaveLauncher = rememberLauncherForActivityResult(CreateDocument("text/plain")) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val message = runCatching { runtime.saveRuntimeLog(uri) }
+                    .fold(
+                        onSuccess = { "运行日志已保存" },
+                        onFailure = { error -> error.message?.let { "保存失败：$it" } ?: "运行日志保存失败" },
+                    )
+                snackbar.showSnackbar(message)
+            }
+        }
+    }
     var editingHomeForum by rememberSaveable { mutableStateOf(false) }
     var homeForumDraft by rememberSaveable { mutableStateOf("") }
     var homeForumError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -2777,15 +2792,12 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
             item {
                 ListItem(
                     modifier = Modifier.clickable {
-                        scope.launch {
-                            context.copyText(runtime.exportRuntimeLog())
-                            snackbar.showSnackbar("运行日志已复制，请注意其中可能包含敏感信息")
-                        }
+                        logSaveLauncher.launch(runtimeLogFileName())
                     },
-                    headlineContent = { Text("复制运行日志") },
+                    headlineContent = { Text("下载运行日志") },
                     supportingContent = {
                         Column {
-                            Text("包含应用启动、页面生命周期、异常、网络请求/响应及贴吧 PB 楼层容器摘要")
+                            Text("通过系统文件选择器保存完整日志，包含应用生命周期、异常、网络请求/响应及贴吧 PB 楼层容器摘要")
                             Text(
                                 text = RuntimeLog.PRIVACY_WARNING,
                                 color = MaterialTheme.colorScheme.error,
@@ -2793,7 +2805,7 @@ fun TiebaSettingsScreen(onBack: () -> Unit) {
                             )
                         }
                     },
-                    leadingContent = { Icon(Icons.Default.BugReport, null) },
+                    leadingContent = { Icon(Icons.Default.Download, null) },
                 )
             }
             item {
@@ -2952,6 +2964,9 @@ private fun Context.copyText(text: String) {
     getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("贴吧内容", text))
     Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
 }
+
+private fun runtimeLogFileName(): String =
+    "Cithub-runtime-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.txt"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

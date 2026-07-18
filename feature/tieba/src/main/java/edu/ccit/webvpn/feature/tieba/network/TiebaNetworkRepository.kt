@@ -1114,9 +1114,7 @@ class TiebaNetworkRepository internal constructor(
         val highlyLikedPostIds = buildSet {
             addAll(data.top_agree_post_list?.post_id_list.orEmpty())
             topAgreePosts.forEach { add(it.id) }
-            hotPosts.forEach { add(it.id) }
-            hotPostContainer?.hot_post_list.orEmpty().forEach { add(it.post_id) }
-            allContainerPosts.filter { it.isHighlyLiked() }.forEach { add(it.id) }
+            allContainerPosts.filter { it.hasHighlyLikedFlag() }.forEach { add(it.id) }
         }
         runtimeLog.info(
             source = "tieba",
@@ -1185,12 +1183,12 @@ class TiebaNetworkRepository internal constructor(
             authorTitle = author.level_name,
             authorIp = author.ip_address.ifBlank { author.ip },
             authorModeratorRole = author.moderatorRole(),
-            isTopAgree = isTopAgree || post.isHighlyLiked(),
+            isTopAgree = isTopAgree || post.hasHighlyLikedFlag(),
         )
     }
 
-    private fun Post.isHighlyLiked(): Boolean =
-        is_top_agree_post != 0 || is_hot_post != 0 || is_wonderful_post != 0
+    private fun Post.hasHighlyLikedFlag(): Boolean =
+        is_top_agree_post != 0 || is_wonderful_post != 0
 
     private fun HotPost.toPost(users: Map<Long, User>): Post = Post(
         id = post_id,

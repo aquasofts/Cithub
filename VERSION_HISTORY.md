@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.1.36`
-- Version code: `42`
+- Version name: `2.2.0`
+- Version code: `43`
 - Updated: 2026-07-18
 
 ## Changes
+
+### 2.2.0 (versionCode 43) — 2026-07-18
+
+- Corrected Tieba floor badges so hot-post containers and `is_hot_post` no longer imply “高赞”; explicit top-agree and wonderful-post indicators continue to preserve the real highly liked floor.
+- Replaced clipboard copying of the rotating runtime log with a system document download flow that streams the complete log directly to a user-selected `.txt` file, avoiding Android Binder transaction-size crashes.
 
 ### 2.1.36 (versionCode 42) — 2026-07-18
 

@@ -3,6 +3,7 @@ package edu.ccit.webvpn.core.runtime
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
@@ -10,6 +11,8 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import java.io.File
+import java.io.IOException
+import java.io.OutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.time.Instant
@@ -152,18 +155,21 @@ class RuntimeLog private constructor(context: Context) {
     suspend fun exportText(): String = withContext(Dispatchers.IO) {
         synchronized(lock) {
             buildString {
-                appendLine("Cithub 运行日志")
-                appendLine("生成时间：${Instant.now()}")
-                appendLine(PRIVACY_WARNING)
-                appendLine(
-                    "说明：单个请求或响应正文最多记录 ${MAX_BODY_BYTES / 1024} KiB，" +
-                        "超出部分会标记为截断；图片、音频、视频和字体正文不写入日志。",
-                )
-                appendLine()
+                append(exportHeader())
                 if (previousFile.exists()) append(previousFile.readText(Charsets.UTF_8))
                 if (currentFile.exists()) append(currentFile.readText(Charsets.UTF_8))
             }.trimEnd()
         }
+    }
+
+    suspend fun saveTo(uri: Uri): Unit = withContext(Dispatchers.IO) {
+        val output = appContext.contentResolver.openOutputStream(uri, "wt")
+            ?: throw IOException("无法打开日志保存位置")
+        output.use(::writeExport)
+    }
+
+    internal suspend fun writeTo(output: OutputStream): Unit = withContext(Dispatchers.IO) {
+        writeExport(output)
     }
 
     suspend fun clear(): Unit = withContext(Dispatchers.IO) {
@@ -190,6 +196,28 @@ class RuntimeLog private constructor(context: Context) {
                 currentFile.appendText(line, Charsets.UTF_8)
             }
         }.onFailure { Log.w(TAG, "Unable to write runtime log", it) }
+    }
+
+    private fun writeExport(output: OutputStream) {
+        val buffered = output.buffered()
+        synchronized(lock) {
+            buffered.write(exportHeader().toByteArray(Charsets.UTF_8))
+            listOf(previousFile, currentFile).forEach { file ->
+                if (file.exists()) file.inputStream().use { input -> input.copyTo(buffered) }
+            }
+            buffered.flush()
+        }
+    }
+
+    private fun exportHeader(): String = buildString {
+        appendLine("Cithub 运行日志")
+        appendLine("生成时间：${Instant.now()}")
+        appendLine(PRIVACY_WARNING)
+        appendLine(
+            "说明：单个请求或响应正文最多记录 ${MAX_BODY_BYTES / 1024} KiB，" +
+                "超出部分会标记为截断；图片、音频、视频和字体正文不写入日志。",
+        )
+        appendLine()
     }
 
     private fun installUncaughtExceptionHandler() {

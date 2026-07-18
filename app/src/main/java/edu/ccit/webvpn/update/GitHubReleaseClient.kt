@@ -60,3 +60,40 @@ internal class GitHubReleaseClient(
         }
     }
 }
+
+internal sealed interface AcceleratorAvailability {
+    data object Checking : AcceleratorAvailability
+    data class Available(val latencyMillis: Long) : AcceleratorAvailability
+    data object Unavailable : AcceleratorAvailability
+}
+
+internal class GitHubAcceleratorChecker(
+    private val userAgent: String,
+    private val probeUrl: String = CITHUB_RELEASES_API,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
+        .build(),
+    private val json: Json = Json { ignoreUnknownKeys = true },
+) {
+    suspend fun check(accelerator: String): AcceleratorAvailability = withContext(Dispatchers.IO) {
+        val startedAt = System.nanoTime()
+        runCatching {
+            val candidate = githubUrlCandidates(probeUrl, listOf(accelerator)).first()
+            val request = Request.Builder()
+                .url(candidate)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .header("User-Agent", userAgent)
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                json.decodeFromString<List<GitHubReleaseDto>>(response.body.string())
+            }
+            AcceleratorAvailability.Available(
+                latencyMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt),
+            )
+        }.getOrElse { AcceleratorAvailability.Unavailable }
+    }
+}
