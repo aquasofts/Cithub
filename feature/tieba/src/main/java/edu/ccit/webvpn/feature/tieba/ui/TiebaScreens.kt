@@ -195,6 +195,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.serialization.Serializable
@@ -260,6 +261,18 @@ private class ForumScreenState {
     var attemptedQueryKey by mutableStateOf<String?>(null)
     val listState = LazyListState()
 }
+
+internal fun shouldContinueForumPaging(
+    serverHasMore: Boolean,
+    receivedThreadCount: Int,
+    append: Boolean,
+    previousPage: Int,
+    loadedPage: Int,
+    previousThreadCount: Int,
+    mergedThreadCount: Int,
+): Boolean = serverHasMore &&
+    receivedThreadCount > 0 &&
+    (!append || loadedPage > previousPage && mergedThreadCount > previousThreadCount)
 
 private class ForumRuleScreenState {
     var loading by mutableStateOf(false)
@@ -537,25 +550,42 @@ private fun ForumScreen(
         scope.launch {
             if (pullRefresh) state.refreshing = true else state.loading = true
             if (state.queryKey == requestKey) state.error = null
-            runCatching {
-                runtime.network.loadForum(
+            try {
+                val result = runtime.network.loadForum(
                     targetPage,
                     preferences.reading.forumSort,
                     state.goodOnly,
                     runtime.accountDao.get(),
                     homeForumName,
                 )
-            }.onSuccess { result ->
                 if (state.queryKey == requestKey) {
-                    state.threads = if (append) (state.threads + result.threads).distinctBy(ForumThread::id) else result.threads
+                    val previousThreads = state.threads
+                    val previousPage = state.page
+                    val mergedThreads = if (append) {
+                        (previousThreads + result.threads).distinctBy(ForumThread::id)
+                    } else {
+                        result.threads
+                    }
+                    state.threads = mergedThreads
                     state.forum = result.forum
-                    state.page = targetPage
-                    state.hasMore = result.hasMore
+                    state.page = result.page
+                    state.hasMore = shouldContinueForumPaging(
+                        serverHasMore = result.hasMore,
+                        receivedThreadCount = result.threads.size,
+                        append = append,
+                        previousPage = previousPage,
+                        loadedPage = result.page,
+                        previousThreadCount = previousThreads.size,
+                        mergedThreadCount = mergedThreads.size,
+                    )
                 }
-            }.onFailure {
-                if (state.queryKey == requestKey) state.error = it.message ?: "加载失败"
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                if (state.queryKey == requestKey) state.error = error.message ?: "加载失败"
+            } finally {
+                if (pullRefresh) state.refreshing = false else state.loading = false
             }
-            if (pullRefresh) state.refreshing = false else state.loading = false
         }
     }
 

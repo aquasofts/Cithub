@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.4`
-- Version code: `47`
-- Updated: 2026-07-19
+- Version name: `2.2.5`
+- Version code: `48`
+- Updated: 2026-07-22
 
 ## Changes
+
+### 2.2.5 (versionCode 48) — 2026-07-22
+
+- Fixed the Tieba forum page occasionally remaining on its loading indicator by retaining normal threads whose per-thread forum metadata is incomplete, matching TiebaLite's response handling.
+- Stopped automatic forum pagination when the server returns an empty, duplicate, or repeated page, preventing runaway page requests and preserving coroutine cancellation.
 
 ### 2.2.4 (versionCode 47) — 2026-07-19
 

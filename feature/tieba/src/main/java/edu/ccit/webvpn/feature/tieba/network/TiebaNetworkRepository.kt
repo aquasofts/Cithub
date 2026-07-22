@@ -1020,10 +1020,6 @@ class TiebaNetworkRepository internal constructor(
         val users = data.user_list.associateBy(User::id)
         val threads = data.thread_list.asSequence()
             .filter { it.ala_info == null && it.forumInfo != null }
-            .filter {
-                canonicalForumName(it.forumInfo?.name.orEmpty()) == requestedForumName &&
-                    it.forumInfo?.id == forum.id
-            }
             .mapNotNull { mapForumThread(it, users, forum.id, forum.name) }
             .distinctBy(ForumThread::id)
             .toList()
@@ -1085,8 +1081,12 @@ class TiebaNetworkRepository internal constructor(
             imageUrls = images,
             videoUrl = source.videoInfo?.videoUrl?.takeIf(String::isNotBlank),
             authorId = author?.id ?: source.authorId,
-            forumId = source.forumInfo?.id ?: fallbackForumId,
-            forumName = source.forumInfo?.name.orEmpty().ifBlank { fallbackForumName },
+            forumId = source.forumInfo?.id?.takeIf { it > 0 }
+                ?: source.forumId.takeIf { it > 0 }
+                ?: fallbackForumId,
+            forumName = source.forumInfo?.name.orEmpty()
+                .ifBlank { source.forumName }
+                .ifBlank { fallbackForumName },
             richExcerpt = richExcerpt,
             authorModeratorRole = author?.moderatorRole(),
         )

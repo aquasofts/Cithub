@@ -331,6 +331,20 @@ class TiebaNetworkTest {
     }
 
     @Test
+    fun repositoryUsesPageForumWhenThreadForumMetadataIsBlank() = runBlocking {
+        val response = successForum().let { source ->
+            val thread = source.data_!!.thread_list.single().copy(forumInfo = SimpleForum())
+            source.copy(data_ = source.data_!!.copy(thread_list = listOf(thread)))
+        }
+
+        val page = repository(FakeTiebaReadApi(response, successThread()))
+            .loadForum(page = 1, sort = ForumSort.BY_REPLY, goodOnly = false)
+
+        assertEquals(TARGET_FORUM_ID, page.threads.single().forumId)
+        assertEquals(TARGET_FORUM_NAME, page.threads.single().forumName)
+    }
+
+    @Test
     fun floorRepliesKeepAuthorAndRichContent() = runBlocking {
         val repository = repository(FakeTiebaReadApi(successForum(), successThread(), successFloor()))
 

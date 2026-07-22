@@ -48,6 +48,7 @@ import java.util.Date
 import java.util.Locale
 import javax.net.ssl.SSLHandshakeException
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
 import okhttp3.Interceptor
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -539,6 +540,7 @@ internal sealed class TiebaReadFailure(message: String, cause: Throwable? = null
 }
 
 internal fun Throwable.toTiebaReadFailure(context: Context): TiebaReadFailure {
+    if (this is CancellationException) throw this
     if (this is TiebaReadFailure) return this
     val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
     val network = connectivity.activeNetwork
