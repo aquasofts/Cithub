@@ -12,6 +12,10 @@ import com.huanchengfly.tieba.post.api.models.protos.frsPage.AdParam as FrsAdPar
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageRequest
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageRequestData
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponse
+import com.huanchengfly.tieba.post.api.models.protos.threadList.AdParam as ThreadListAdParam
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListRequest
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListRequestData
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListResponse
 import com.huanchengfly.tieba.post.api.models.protos.forumRuleDetail.ForumRuleDetailRequest
 import com.huanchengfly.tieba.post.api.models.protos.forumRuleDetail.ForumRuleDetailRequestData
 import com.huanchengfly.tieba.post.api.models.protos.forumRuleDetail.ForumRuleDetailResponse
@@ -83,6 +87,10 @@ internal interface TiebaReadApi {
         @Body body: RequestBody,
         @Header("forum_name") forumName: String,
     ): FrsPageResponse
+
+    @Headers("$TRACE_HEADER: FRS_THREAD_LIST")
+    @POST("c/f/frs/threadlist?cmd=301002")
+    suspend fun forumThreads(@Body body: RequestBody): ThreadListResponse
 
     @Headers("$TRACE_HEADER: PB")
     @POST("c/f/pb/page?cmd=302001&format=protobuf")
@@ -271,6 +279,39 @@ internal class TiebaReadRequestFactory(
                 up_schema = "",
                 with_group = 1,
                 yuelaou_locate = "",
+            ),
+        ),
+        credentials = credentials,
+        includeSToken = true,
+    )
+
+    fun forumThreads(
+        forumId: Long,
+        forumName: String,
+        page: Int,
+        sortType: Int,
+        threadIds: List<Long>,
+        credentials: TiebaReadCredentials?,
+        clientConfig: TiebaClientConfig? = null,
+    ): RequestBody = protobufBody(
+        ThreadListRequest(
+            ThreadListRequestData(
+                ad_param = ThreadListAdParam(load_count = 3, refresh_count = 0),
+                app_pos = appPosition(),
+                common = identity.commonRequest(credentials, clientConfig = clientConfig),
+                forum_id = forumId,
+                forum_name = forumName,
+                last_click_tid = 0,
+                need_abstract = 0,
+                pn = page,
+                q_type = 2,
+                scr_dip = metrics.density.toDouble(),
+                scr_h = metrics.heightPixels,
+                scr_w = metrics.widthPixels,
+                sort_type = sortType,
+                st_type = 0,
+                thread_ids = threadIds.joinToString(","),
+                user_id = credentials?.uid,
             ),
         ),
         credentials = credentials,

@@ -3,6 +3,7 @@ package edu.ccit.webvpn.feature.tieba.network
 import android.content.Context
 import android.provider.Settings
 import com.google.gson.Gson
+import com.huanchengfly.tieba.post.api.models.protos.AlaLiveInfo
 import com.huanchengfly.tieba.post.api.models.protos.Abstract as ThreadAbstract
 import com.huanchengfly.tieba.post.api.models.protos.Anti
 import com.huanchengfly.tieba.post.api.models.protos.Error
@@ -23,6 +24,8 @@ import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponse
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponseData
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.SignInfo
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.SignUser
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListResponse
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListResponseData
 import com.huanchengfly.tieba.post.api.models.protos.forumRuleDetail.ForumRuleDetailResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbFloor.PbFloorResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbFloor.PbFloorResponseData
@@ -34,6 +37,7 @@ import com.huanchengfly.tieba.post.api.models.protos.addPost.AddPostResponse
 import edu.ccit.webvpn.feature.tieba.FloorSort
 import edu.ccit.webvpn.feature.tieba.ForumSummary
 import edu.ccit.webvpn.feature.tieba.ForumSort
+import edu.ccit.webvpn.feature.tieba.ForumThread
 import edu.ccit.webvpn.feature.tieba.LoadPicPageData
 import edu.ccit.webvpn.feature.tieba.SignOutcome
 import edu.ccit.webvpn.feature.tieba.TARGET_FORUM_ID
@@ -345,6 +349,120 @@ class TiebaNetworkTest {
     }
 
     @Test
+    fun repositoryHydratesFrsThreadIdsBeforeMapping() = runBlocking {
+        val frsResponse = successForum().let { source ->
+            source.copy(
+                data_ = source.data_!!.copy(
+                    thread_list = emptyList(),
+                    thread_id_list = listOf(9),
+                    user_list = emptyList(),
+                ),
+            )
+        }
+        val threadListResponse = ThreadListResponse(
+            error = Error(error_code = 0),
+            data_ = ThreadListResponseData(
+                thread_list = listOf(
+                    ThreadInfo(
+                        threadId = 9,
+                        title = "主题",
+                        authorId = 4,
+                        forumInfo = null,
+                    ),
+                ),
+                user_list = listOf(User(id = 4, name = "user", nameShow = "昵称")),
+            ),
+        )
+        val readApi = FakeTiebaReadApi(
+            forumResponse = frsResponse,
+            threadResponse = successThread(),
+            forumThreadResponse = threadListResponse,
+        )
+
+        val page = repository(readApi).loadForum(1, ForumSort.BY_REPLY, false)
+
+        assertEquals(1, readApi.forumThreadCalls)
+        assertEquals(listOf("9"), page.threads.map(ForumThread::id))
+        assertEquals(TARGET_FORUM_ID, page.threads.single().forumId)
+        assertEquals(TARGET_FORUM_NAME, page.threads.single().forumName)
+    }
+
+    @Test
+    fun repositoryKeepsThreadWhenAllPerThreadForumMetadataIsMissing() = runBlocking {
+        val response = successForum().let { source ->
+            val thread = source.data_!!.thread_list.single().copy(
+                forumInfo = null,
+                forumId = 0,
+                forumName = "",
+            )
+            source.copy(data_ = source.data_!!.copy(thread_list = listOf(thread)))
+        }
+
+        val page = repository(FakeTiebaReadApi(response, successThread()))
+            .loadForum(page = 1, sort = ForumSort.BY_REPLY, goodOnly = false)
+
+        assertEquals(TARGET_FORUM_ID, page.threads.single().forumId)
+        assertEquals(TARGET_FORUM_NAME, page.threads.single().forumName)
+    }
+
+    @Test
+    fun repositoryKeepsThreadWhenDirectForumMetadataMatchesPageForum() = runBlocking {
+        val response = successForum().let { source ->
+            val thread = source.data_!!.thread_list.single().copy(
+                forumInfo = null,
+                forumId = TARGET_FORUM_ID,
+                forumName = "${TARGET_FORUM_NAME}吧",
+            )
+            source.copy(data_ = source.data_!!.copy(thread_list = listOf(thread)))
+        }
+
+        val page = repository(FakeTiebaReadApi(response, successThread()))
+            .loadForum(page = 1, sort = ForumSort.BY_REPLY, goodOnly = false)
+
+        assertEquals(listOf("9"), page.threads.map { it.id })
+    }
+
+    @Test
+    fun repositoryDropsThreadWhenAnyForumMetadataExplicitlyTargetsAnotherForum() = runBlocking {
+        val response = successForum().let { source ->
+            val original = source.data_!!.thread_list.single()
+            val wrongDirectMetadata = original.copy(
+                threadId = 10,
+                forumInfo = SimpleForum(id = TARGET_FORUM_ID, name = TARGET_FORUM_NAME),
+                forumId = 1,
+                forumName = "其他吧",
+            )
+            val wrongNestedMetadata = original.copy(
+                threadId = 11,
+                forumInfo = SimpleForum(id = 1, name = "其他吧"),
+                forumId = TARGET_FORUM_ID,
+                forumName = TARGET_FORUM_NAME,
+            )
+            source.copy(
+                data_ = source.data_!!.copy(thread_list = listOf(wrongDirectMetadata, wrongNestedMetadata)),
+            )
+        }
+
+        val page = repository(FakeTiebaReadApi(response, successThread()))
+            .loadForum(page = 1, sort = ForumSort.BY_REPLY, goodOnly = false)
+
+        assertTrue(page.threads.isEmpty())
+    }
+
+    @Test
+    fun repositoryDropsLiveThreadEvenWhenItsForumMatches() = runBlocking {
+        val response = successForum().let { source ->
+            val thread = source.data_!!.thread_list.single().copy(ala_info = AlaLiveInfo())
+            source.copy(data_ = source.data_!!.copy(thread_list = listOf(thread)))
+        }
+
+        val page = repository(FakeTiebaReadApi(response, successThread()))
+            .loadForum(page = 1, sort = ForumSort.BY_REPLY, goodOnly = false)
+
+        assertTrue(page.threads.isEmpty())
+    }
+
+    @Test
     fun floorRepliesKeepAuthorAndRichContent() = runBlocking {
         val repository = repository(FakeTiebaReadApi(successForum(), successThread(), successFloor()))
 
@@ -446,6 +564,9 @@ class TiebaNetworkTest {
                 forumCalls += 1
                 return FrsPageResponse(error = Error(error_code = 4))
             }
+
+            override suspend fun forumThreads(body: RequestBody): ThreadListResponse =
+                ThreadListResponse(error = Error(error_code = 0))
 
             override suspend fun thread(body: RequestBody, userToken: String?): PbPageResponse = successThread()
             override suspend fun floor(body: RequestBody, userToken: String?): PbFloorResponse = PbFloorResponse(error = Error(error_code = 0))
@@ -1485,12 +1606,18 @@ private class FakeTiebaReadApi(
     private val forumResponse: FrsPageResponse,
     private val threadResponse: PbPageResponse,
     private val floorResponse: PbFloorResponse = PbFloorResponse(error = Error(error_code = 0)),
+    private val forumThreadResponse: ThreadListResponse = ThreadListResponse(error = Error(error_code = 0)),
 ) : TiebaReadApi {
     var lastForumName: String = ""
+    var forumThreadCalls: Int = 0
 
     override suspend fun forum(body: RequestBody, forumName: String): FrsPageResponse {
         lastForumName = forumName
         return forumResponse
+    }
+    override suspend fun forumThreads(body: RequestBody): ThreadListResponse {
+        forumThreadCalls += 1
+        return forumThreadResponse
     }
     override suspend fun thread(body: RequestBody, userToken: String?): PbPageResponse = threadResponse
     override suspend fun floor(body: RequestBody, userToken: String?): PbFloorResponse = floorResponse

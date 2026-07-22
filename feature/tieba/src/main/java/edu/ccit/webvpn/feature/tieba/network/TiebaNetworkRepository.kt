@@ -20,6 +20,7 @@ import com.huanchengfly.tieba.post.api.models.protos.User
 import edu.ccit.webvpn.core.runtime.RuntimeLog
 import edu.ccit.webvpn.core.runtime.RuntimeLogInterceptor
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponse
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbFloor.PbFloorResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbPage.PbPageResponse
 import com.huanchengfly.tieba.post.api.models.protos.profile.ProfileResponse
@@ -345,7 +346,14 @@ class TiebaNetworkRepository internal constructor(
         // anonymously: the page's anti.tbs is consumed directly by the sign endpoint.
         val resolved = readForum(page, sortType, goodOnly, loadType, credentials, requestedForumName)
         resolved.requireSuccess("FRS")
-        mapForum(resolved, page, requestedForumName).also { signDiagnostics.recordForumSnapshot(account, it.forum) }
+        val hydrated = hydrateForumThreads(
+            response = resolved,
+            page = page,
+            sortType = sortType,
+            credentials = credentials,
+            forumName = requestedForumName,
+        )
+        mapForum(hydrated, page, requestedForumName).also { signDiagnostics.recordForumSnapshot(account, it.forum) }
     }
 
     suspend fun search(
@@ -946,6 +954,56 @@ class TiebaNetworkRepository internal constructor(
         )
     }
 
+    private suspend fun hydrateForumThreads(
+        response: FrsPageResponse,
+        page: Int,
+        sortType: Int,
+        credentials: TiebaReadCredentials?,
+        forumName: String,
+    ): FrsPageResponse {
+        val data = response.data_ ?: throw TiebaReadFailure.Data()
+        val forum = data.forum ?: throw TiebaReadFailure.Data()
+        val threadIds = data.thread_id_list.filter { it > 0 }.distinct()
+        if (threadIds.isEmpty()) return response
+
+        val clientConfig = settings.clientConfig()
+        val hydratedThreads = data.thread_list.toMutableList()
+        val hydratedUsers = data.user_list.toMutableList()
+        threadIds.chunked(FRS_THREAD_LIST_BATCH_SIZE).forEach { batch ->
+            val threadList = readApi.forumThreads(
+                readRequests.forumThreads(
+                    forumId = forum.id,
+                    forumName = forumName,
+                    page = page,
+                    sortType = sortType,
+                    threadIds = batch,
+                    credentials = credentials,
+                    clientConfig = clientConfig,
+                ),
+            )
+            threadList.requireSuccess("FRS thread list")
+            val threadData = threadList.data_ ?: throw TiebaReadFailure.Data()
+            hydratedThreads += threadData.thread_list
+            hydratedUsers += threadData.user_list
+        }
+        runtimeLog.info(
+            source = "tieba",
+            event = "frs_thread_list_hydration",
+            fields = mapOf(
+                "requested_page" to page,
+                "thread_id_count" to threadIds.size,
+                "frs_thread_count" to data.thread_list.size,
+                "hydrated_thread_count" to hydratedThreads.size,
+            ),
+        )
+        return response.copy(
+            data_ = data.copy(
+                thread_list = hydratedThreads,
+                user_list = hydratedUsers.distinctBy(User::id),
+            ),
+        )
+    }
+
     private suspend fun readThread(
         threadId: Long,
         page: Int,
@@ -1018,12 +1076,50 @@ class TiebaNetworkRepository internal constructor(
         val forum = data.forum ?: throw TiebaReadFailure.Data()
         requireRequestedForum(forum.id, forum.name, requestedForumName)
         val users = data.user_list.associateBy(User::id)
-        val threads = data.thread_list.asSequence()
-            .filter { it.ala_info == null && it.forumInfo != null }
-            .mapNotNull { mapForumThread(it, users, forum.id, forum.name) }
-            .distinctBy(ForumThread::id)
-            .toList()
         val page = data.page ?: throw TiebaReadFailure.Data()
+        var liveThreadCount = 0
+        var crossForumThreadCount = 0
+        var missingForumMetadataCount = 0
+        var invalidThreadIdCount = 0
+        val threads = buildList {
+            data.thread_list.forEach { source ->
+                if (source.ala_info != null) {
+                    liveThreadCount += 1
+                    return@forEach
+                }
+                val forumMetadata = source.forumMetadata()
+                if (forumMetadata.isEmpty()) {
+                    missingForumMetadataCount += 1
+                } else if (!forumMetadata.matches(forum.id, forum.name)) {
+                    crossForumThreadCount += 1
+                    return@forEach
+                }
+                val mapped = mapForumThread(source, users, forum.id, forum.name)
+                if (mapped == null) {
+                    invalidThreadIdCount += 1
+                } else {
+                    add(mapped)
+                }
+            }
+        }.distinctBy(ForumThread::id)
+        val responsePage = page.current_page.takeIf { it > 0 } ?: requestedPage
+        val hasMore = page.has_more == 1 || page.total_page > requestedPage
+        runtimeLog.info(
+            source = "tieba",
+            event = "frs_page_mapping",
+            fields = mapOf(
+                "raw_thread_count" to data.thread_list.size,
+                "raw_thread_id_count" to data.thread_id_list.size,
+                "live_thread_count" to liveThreadCount,
+                "cross_forum_thread_count" to crossForumThreadCount,
+                "missing_forum_metadata_count" to missingForumMetadataCount,
+                "invalid_thread_id_count" to invalidThreadIdCount,
+                "visible_thread_count" to threads.size,
+                "requested_page" to requestedPage,
+                "response_page" to responsePage,
+                "has_more" to hasMore,
+            ),
+        )
         return ForumPage(
             forum = ForumSummary(
                 id = forum.id.toString(),
@@ -1042,10 +1138,36 @@ class TiebaNetworkRepository internal constructor(
                 signedDays = forum.sign_in_info?.user_info?.cont_sign_num ?: 0,
             ),
             threads = threads,
-            page = page.current_page.takeIf { it > 0 } ?: requestedPage,
-            hasMore = page.has_more == 1 || page.total_page > requestedPage,
+            page = responsePage,
+            hasMore = hasMore,
         )
     }
+
+    private data class ForumMetadata(
+        val ids: List<Long>,
+        val names: List<String>,
+    ) {
+        fun isEmpty(): Boolean = ids.isEmpty() && names.isEmpty()
+
+        fun matches(expectedId: Long, expectedName: String): Boolean {
+            val idsMatch = expectedId <= 0 || ids.all { it == expectedId }
+            val canonicalExpectedName = canonicalForumName(expectedName)
+            val namesMatch = canonicalExpectedName.isBlank() ||
+                names.all { canonicalForumName(it) == canonicalExpectedName }
+            return idsMatch && namesMatch
+        }
+    }
+
+    private fun ThreadInfo.forumMetadata(): ForumMetadata = ForumMetadata(
+        ids = listOfNotNull(
+            forumInfo?.id?.takeIf { it > 0 },
+            forumId.takeIf { it > 0 },
+        ),
+        names = listOf(
+            forumInfo?.name.orEmpty(),
+            forumName,
+        ).filter(String::isNotBlank),
+    )
 
     private fun mapForumThread(
         source: ThreadInfo,
@@ -1353,12 +1475,17 @@ class TiebaNetworkRepository internal constructor(
     }
 
     private fun FrsPageResponse.errorCode(): Int = error?.error_code ?: 0
+    private fun ThreadListResponse.errorCode(): Int = error?.error_code ?: 0
     private fun PbPageResponse.errorCode(): Int = error?.error_code ?: 0
     private fun PbFloorResponse.errorCode(): Int = error?.error_code ?: 0
     private fun ProfileResponse.errorCode(): Int = error?.error_code ?: 0
     private fun UserPostResponse.errorCode(): Int = error?.error_code ?: 0
 
     private fun FrsPageResponse.requireSuccess(kind: String) {
+        if (errorCode() != 0) apiFailure(kind, errorCode())
+    }
+
+    private fun ThreadListResponse.requireSuccess(kind: String) {
         if (errorCode() != 0) apiFailure(kind, errorCode())
     }
 
@@ -1489,6 +1616,7 @@ private fun String.cookieValue(name: String): String? = split(';').firstNotNullO
 }
 
 private const val OFFICIAL_WRITE_VERSION = "12.41.7.1"
+private const val FRS_THREAD_LIST_BATCH_SIZE = 30
 private const val TIEBA_UPLOAD_CHUNK_SIZE = 512_000
 private const val TIEBA_UPLOAD_BOUNDARY = "--------7da3d81520810*"
 

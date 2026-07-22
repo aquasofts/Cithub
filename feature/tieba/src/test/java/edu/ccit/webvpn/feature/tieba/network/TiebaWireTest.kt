@@ -6,6 +6,8 @@ import com.huanchengfly.tieba.post.api.models.protos.frsPage.ForumInfo
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageRequest
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponse
 import com.huanchengfly.tieba.post.api.models.protos.frsPage.FrsPageResponseData
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListRequest
+import com.huanchengfly.tieba.post.api.models.protos.threadList.ThreadListResponse
 import com.huanchengfly.tieba.post.api.models.protos.pbFloor.PbFloorRequest
 import com.huanchengfly.tieba.post.api.models.protos.pbPage.PbPageRequest
 import com.huanchengfly.tieba.post.api.models.protos.profile.ProfileRequest
@@ -81,6 +83,42 @@ class TiebaWireTest {
         val message = FrsPageRequest.ADAPTER.decode(multipart.dataPart())
         assertEquals("Kotlin", message.data_?.kw)
         assertEquals("Kotlin", TiebaReadRequestFactory.encodedForumName("Kotlin"))
+    }
+
+    @Test
+    fun `frs thread list hydrates returned ids through TiebaLite endpoint`() = runBlocking {
+        val credentials = TiebaReadCredentials(7, "bduss", "stoken", null)
+        val multipart = requests.forumThreads(
+            forumId = TARGET_FORUM_ID,
+            forumName = "长春工程学院",
+            page = 2,
+            sortType = 1,
+            threadIds = listOf(9, 10),
+            credentials = credentials,
+        ) as MultipartBody
+        val message = ThreadListRequest.ADAPTER.decode(multipart.dataPart())
+
+        assertEquals(TARGET_FORUM_ID, message.data_?.forum_id)
+        assertEquals("长春工程学院", message.data_?.forum_name)
+        assertEquals(2, message.data_?.pn)
+        assertEquals(1, message.data_?.sort_type)
+        assertEquals("9,10", message.data_?.thread_ids)
+        assertEquals(7L, message.data_?.user_id)
+        assertNotNull(multipart.parts.firstOrNull { it.headers?.get("Content-Disposition")?.contains("stoken") == true })
+
+        val expected = ThreadListResponse(error = Error(error_code = 0))
+        server.enqueue(
+            okhttp3.mockwebserver.MockResponse()
+                .setHeader("Content-Type", "application/octet-stream")
+                .setBody(Buffer().write(expected.encode())),
+        )
+        val client = OkHttpClient.Builder().addInterceptor(tiebaReadHeaderInterceptor(context, identity)).build()
+        val api = createTiebaReadRetrofit(client, server.url("/").toString()).create(TiebaReadApi::class.java)
+
+        assertEquals(expected, api.forumThreads(multipart))
+        val recorded = server.takeRequest(2, TimeUnit.SECONDS)
+        assertEquals("/c/f/frs/threadlist?cmd=301002", recorded?.path)
+        assertNull(recorded?.getHeader("X-CCIT-Tieba-Request"))
     }
 
     @Test

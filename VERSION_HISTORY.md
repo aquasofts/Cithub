@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.5`
-- Version code: `48`
+- Version name: `2.2.6`
+- Version code: `49`
 - Updated: 2026-07-22
 
 ## Changes
+
+### 2.2.6 (versionCode 49) — 2026-07-22
+
+- Fixed the current Tieba FRS response showing “暂无帖子” when it returns thread IDs without inline thread details by hydrating those IDs through TiebaLite's `/c/f/frs/threadlist` protobuf endpoint before mapping the forum page.
+- Kept threads with missing per-thread forum metadata, rejected only explicit cross-forum or live entries, and added safe FRS mapping diagnostics plus regression coverage for hydration, metadata fallback, cross-forum filtering, live filtering, and pagination termination.
 
 ### 2.2.5 (versionCode 48) — 2026-07-22
 

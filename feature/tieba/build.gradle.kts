@@ -11,12 +11,14 @@ plugins {
 
 wire {
     sourcePath {
-        // Only the six read-only roots and their transitive schema dependencies are generated.
+        // Only the read-only roots and their transitive schema dependencies are generated.
         srcDir(rootProject.file("TiebaLite/app/src/main/protos"))
     }
     root(
         "tieba.frsPage.FrsPageRequest",
         "tieba.frsPage.FrsPageResponse",
+        "tieba.threadList.ThreadListRequest",
+        "tieba.threadList.ThreadListResponse",
         "tieba.pbPage.PbPageRequest",
         "tieba.pbPage.PbPageResponse",
         "tieba.pbFloor.PbFloorRequest",
