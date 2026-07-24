@@ -6,8 +6,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import edu.ccit.webvpn.core.ui.CcitAcademicTheme
+import edu.ccit.webvpn.update.AppUpdateViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -25,6 +27,9 @@ class AppearanceSettingsScreenTest {
         val themeSettings = FakeSettings(ThemeSettings())
         val uiSettings = FakeSettings(UISettings())
         val rssSettings = FakeSettings(RssFeedSettings())
+        val updateSettings = FakeSettings(UpdateSettings())
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val updateViewModel = AppUpdateViewModel(context, DataStoreSettingsRepository(context))
 
         compose.setContent {
             CcitAcademicTheme {
@@ -34,6 +39,9 @@ class AppearanceSettingsScreenTest {
                     uiSettings = uiSettings,
                     rssFeedSettings = rssSettings,
                     currentRssFeeds = rssSettings.value,
+                    updateSettings = updateSettings,
+                    currentUpdateSettings = updateSettings.value,
+                    updateViewModel = updateViewModel,
                     reduceEffect = false,
                     onThemedIconChange = {},
                     onBack = {},

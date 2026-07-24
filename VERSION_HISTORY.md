@@ -5,11 +5,28 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.6`
-- Version code: `49`
-- Updated: 2026-07-22
+- Version name: `2.2.9`
+- Version code: `52`
+- Updated: 2026-07-24
 
 ## Changes
+
+### 2.2.9 (versionCode 52) — 2026-07-24
+
+- Preserved the campus-news article position when opening an inline image and returning, while keeping separate article visits at the top.
+- Added upgrade housekeeping for the persistent Tieba content cache alongside existing disposable feed, image, HTTP, and update-download caches; user accounts, settings, sessions, and drafts remain intact.
+- Reduced campus-news full-image decode memory and made WebView image-cache races fail as an image load error instead of terminating the app.
+
+### 2.2.8 (versionCode 51) — 2026-07-24
+
+- Reset a thread's transient scroll state after leaving it so every new visit starts at the original post, while preserving the reading position when returning from the image viewer or another child page.
+- Kept the forum list and its scroll position intact when returning from a thread.
+
+### 2.2.7 (versionCode 50) — 2026-07-24
+
+- Fixed relative images in campus-news RSS article bodies by resolving them against the feed document before secure rendering and image caching.
+- Kept bottom-tab pages alive in memory, showed persisted News and Tieba content before startup refreshes, and expired disk content after seven days.
+- Added persistent Tieba forum/thread caches with a five-minute minimum thread refresh interval so previously opened posts render immediately and then refresh when due.
 
 ### 2.2.6 (versionCode 49) — 2026-07-22
 

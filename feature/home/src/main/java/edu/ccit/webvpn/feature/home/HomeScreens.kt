@@ -109,7 +109,6 @@ import androidx.navigation3.ui.NavDisplay
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import coil3.size.SizeResolver
 import edu.ccit.webvpn.core.ui.CcitCard
 import edu.ccit.webvpn.core.ui.CcitColors
 import edu.ccit.webvpn.core.ui.LocalReduceMotion
@@ -134,6 +133,11 @@ private data class ArticleRoute(val articleId: String) : NavKey
 @Serializable
 private data class ArticleImageRoute(val url: String) : NavKey
 
+private class ArticleReaderState {
+    var originalMode: Boolean = false
+    var scrollY: Int = 0
+}
+
 private val HomeWindowInsets = WindowInsets(0, 0, 0, 0)
 
 @Composable
@@ -147,6 +151,12 @@ fun HomeRootScreen(
     val backStack = rememberNavBackStack(FeedRoute)
     val viewModel: HomeViewModel = viewModel()
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val articleReaderStates = remember { mutableMapOf<String, ArticleReaderState>() }
+
+    fun popCurrentRoute() {
+        (backStack.lastOrNull() as? ArticleRoute)?.let { articleReaderStates.remove(it.articleId) }
+        backStack.removeLastOrNull()
+    }
 
     LaunchedEffect(wechatRssUrls, newsRssUrls) {
         viewModel.configure(wechatRssUrls, newsRssUrls)
@@ -154,7 +164,7 @@ fun HomeRootScreen(
 
     NavDisplay(
         backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
+        onBack = ::popCurrentRoute,
         modifier = modifier.fillMaxSize(),
         transitionSpec = { ccitForwardNavigationTransition(reduceMotion) },
         popTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
@@ -170,6 +180,7 @@ fun HomeRootScreen(
                 onArticle = {
                     viewModel.loadArticleDetail(it.id)
                     val route = ArticleRoute(it.id)
+                    articleReaderStates.remove(route.articleId)
                     if (backStack.lastOrNull() != route) backStack.add(route)
                 },
             )
@@ -181,16 +192,23 @@ fun HomeRootScreen(
                     if (state.isInitiallyLoading()) {
                         CircularProgressIndicator()
                     } else {
-                        OutlinedButton(onClick = { backStack.removeLastOrNull() }) { Text("返回") }
+                        OutlinedButton(onClick = ::popCurrentRoute) { Text("返回") }
                     }
                 }
             } else {
+                val readerState = articleReaderStates.getOrPut(route.articleId) { ArticleReaderState() }
                 ArticleReaderScreen(
                     article = article,
-                    onBack = { backStack.removeLastOrNull() },
+                    onBack = ::popCurrentRoute,
                     onImage = { url ->
                         val imageRoute = ArticleImageRoute(url)
                         if (backStack.lastOrNull() != imageRoute) backStack.add(imageRoute)
+                    },
+                    initialOriginalMode = readerState.originalMode,
+                    restoreScrollY = readerState.scrollY,
+                    onReadingPositionCaptured = { originalMode, scrollY ->
+                        readerState.originalMode = originalMode
+                        readerState.scrollY = scrollY
                     },
                 )
             }
@@ -417,11 +435,14 @@ internal fun ArticleReaderScreen(
     article: HomeArticle,
     onBack: () -> Unit,
     onImage: (String) -> Unit = {},
+    initialOriginalMode: Boolean = false,
+    restoreScrollY: Int = 0,
+    onReadingPositionCaptured: (originalMode: Boolean, scrollY: Int) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val contentKind = remember(article.id, article.html) { articleContentKind(article) }
     val canOpenOriginal = isAllowedArticleUrl(article.link, article.allowedArticleHosts)
-    var originalMode by remember(article.id) { mutableStateOf(false) }
+    var originalMode by remember(article.id) { mutableStateOf(initialOriginalMode) }
     var reloadKey by remember(article.id) { mutableStateOf(0) }
     var webView by remember(article.id, originalMode, reloadKey) { mutableStateOf<WebView?>(null) }
     var canGoBackInWebView by remember(article.id, originalMode, reloadKey) { mutableStateOf(false) }
@@ -504,8 +525,12 @@ internal fun ArticleReaderScreen(
                         onCanGoBackChange = { canGoBackInWebView = it },
                         onLoadEvent = { event -> loadState = reduceArticleLoadState(loadState, event) },
                         onRequestOriginal = { originalMode = true },
-                        onImageClick = onImage,
+                        onImageClick = { url ->
+                            onReadingPositionCaptured(originalMode, webView?.scrollY ?: 0)
+                            onImage(url)
+                        },
                         onImageLongPress = { url, offset -> imageMenu = ArticleImageMenu(url, offset) },
+                        restoreScrollY = restoreScrollY,
                     )
                 }
             }
@@ -673,13 +698,20 @@ private fun FullArticleImageScreen(url: String, onBack: () -> Unit) {
     val saveAction = rememberHomeImageSaveAction(url)
 
     LaunchedEffect(url, retry) {
+        loading = true
+        failed = false
         localImage = cache.cached(url)?.file ?: cache.getOrFetch(url)?.file
+        if (localImage == null) {
+            loading = false
+            failed = true
+        }
     }
-    val request = remember(context, url, localImage, retry) {
-        ImageRequest.Builder(context)
-            .data(localImage ?: url)
-            .size(SizeResolver.ORIGINAL)
-            .build()
+    val request = remember(context, localImage, retry) {
+        localImage?.let { imageFile ->
+            ImageRequest.Builder(context)
+                .data(imageFile)
+                .build()
+        }
     }
     val transform = rememberTransformableState { _, zoom, pan, _ ->
         scale = (scale * zoom).coerceIn(1f, 6f)
@@ -698,29 +730,31 @@ private fun FullArticleImageScreen(url: String, onBack: () -> Unit) {
             onSave = saveAction.save,
             saveEnabled = !failed && !saveAction.saving,
         ) {
-            AsyncImage(
-                model = request,
-                contentDescription = "新闻图片",
-                modifier = Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offsetX
-                    translationY = offsetY
-                },
-                contentScale = ContentScale.Fit,
-                onLoading = {
-                    loading = true
-                    failed = false
-                },
-                onSuccess = {
-                    loading = false
-                    failed = false
-                },
-                onError = {
-                    loading = false
-                    failed = true
-                },
-            )
+            request?.let { localRequest ->
+                AsyncImage(
+                    model = localRequest,
+                    contentDescription = "新闻图片",
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offsetX
+                        translationY = offsetY
+                    },
+                    contentScale = ContentScale.Fit,
+                    onLoading = {
+                        loading = true
+                        failed = false
+                    },
+                    onSuccess = {
+                        loading = false
+                        failed = false
+                    },
+                    onError = {
+                        loading = false
+                        failed = true
+                    },
+                )
+            }
         }
         if (loading) CircularProgressIndicator(color = Color.White)
         if (failed) {
@@ -838,6 +872,7 @@ private fun SecureArticleWebView(
     onRequestOriginal: () -> Unit,
     onImageClick: (String) -> Unit,
     onImageLongPress: (String, IntOffset) -> Unit,
+    restoreScrollY: Int,
 ) {
     val context = LocalContext.current
     val imageCache = remember(context) { HomeImageCache.get(context) }
@@ -845,6 +880,7 @@ private fun SecureArticleWebView(
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { viewContext ->
+            var pendingScrollY = restoreScrollY.coerceAtLeast(0)
             WebView(viewContext).apply {
                 var lastTouchOffset = IntOffset.Zero
                 var blockingMultiTouch = false
@@ -896,13 +932,17 @@ private fun SecureArticleWebView(
                         if (originalMode || request?.isForMainFrame != false) return null
                         val url = request.url.toString()
                         if (url !in cachedArticleImages) return null
-                        return imageCache.getOrFetchBlocking(url)?.let { cached ->
-                            WebResourceResponse(cached.mimeType, null, cached.file.inputStream()).apply {
-                                responseHeaders = mapOf(
-                                    "Cache-Control" to "public, max-age=31536000, immutable",
-                                    "Access-Control-Allow-Origin" to "*",
-                                )
+                        return try {
+                            imageCache.getOrFetchBlocking(url)?.let { cached ->
+                                WebResourceResponse(cached.mimeType, null, cached.file.inputStream()).apply {
+                                    responseHeaders = mapOf(
+                                        "Cache-Control" to "public, max-age=31536000, immutable",
+                                        "Access-Control-Allow-Origin" to "*",
+                                    )
+                                }
                             }
+                        } catch (_: Exception) {
+                            null
                         }
                     }
 
@@ -912,6 +952,15 @@ private fun SecureArticleWebView(
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         view?.installArticleImageClickHandler()
+                        val targetScrollY = pendingScrollY
+                        pendingScrollY = 0
+                        if (targetScrollY > 0) {
+                            view?.let { articleView ->
+                                articleView.post {
+                                    if (articleView.isAttachedToWindow) articleView.scrollTo(0, targetScrollY)
+                                }
+                            }
+                        }
                         onCanGoBackChange(view?.canGoBack() == true)
                         onLoadEvent(ArticleLoadEvent.Finished)
                     }

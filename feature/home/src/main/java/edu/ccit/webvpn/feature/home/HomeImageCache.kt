@@ -6,7 +6,6 @@ import edu.ccit.webvpn.core.runtime.RuntimeLogInterceptor
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -30,7 +29,7 @@ internal data class CachedHomeImage(val file: File, val mimeType: String)
  */
 internal class HomeImageCache private constructor(context: Context) {
     private val directory = File(context.cacheDir, "home_image_cache").apply { mkdirs() }
-    private val locks = ConcurrentHashMap<String, Any>()
+    private val locks = Array(CACHE_LOCK_STRIPES) { Any() }
     private val runtimeLog = RuntimeLog.get(context)
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -43,14 +42,16 @@ internal class HomeImageCache private constructor(context: Context) {
 
     fun cached(url: String): CachedHomeImage? {
         if (!isSafeHttpsUrl(url)) return null
-        val key = cacheKey(url)
-        val image = File(directory, "$key.img")
-        if (!image.isFile || image.length() <= 0L) return null
-        image.setLastModified(System.currentTimeMillis())
-        val mime = runCatching { File(directory, "$key.mime").takeIf(File::isFile)?.readText() }.getOrNull()
-            ?.takeIf { it.startsWith("image/") }
-            ?: mimeFromUrl(url)
-        return CachedHomeImage(image, mime)
+        return runCatching {
+            val key = cacheKey(url)
+            val image = File(directory, "$key.img")
+            if (!image.isFile || image.length() <= 0L) return@runCatching null
+            image.setLastModified(System.currentTimeMillis())
+            val mime = File(directory, "$key.mime").takeIf(File::isFile)?.readText()
+                ?.takeIf { it.startsWith("image/") }
+                ?: mimeFromUrl(url)
+            CachedHomeImage(image, mime)
+        }.getOrNull()
     }
 
     suspend fun getOrFetch(url: String): CachedHomeImage? = withContext(Dispatchers.IO) {
@@ -61,9 +62,11 @@ internal class HomeImageCache private constructor(context: Context) {
         cached(url)?.let { return it }
         if (!isSafeHttpsUrl(url)) return null
         val key = cacheKey(url)
-        return synchronized(locks.getOrPut(key) { Any() }) {
+        val lock = locks[Math.floorMod(key.hashCode(), locks.size)]
+        return synchronized(lock) {
             try {
                 cached(url)?.let { return@synchronized it }
+                if (!directory.exists() && !directory.mkdirs()) return@synchronized null
                 val request = Request.Builder()
                     .url(url)
                     .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
@@ -106,7 +109,7 @@ internal class HomeImageCache private constructor(context: Context) {
                     trim()
                     CachedHomeImage(target, mime)
                 }
-            } catch (error: IOException) {
+            } catch (error: Exception) {
                 runtimeLog.error(
                     source = "home",
                     event = "image_cache_fetch_failed",
@@ -119,8 +122,15 @@ internal class HomeImageCache private constructor(context: Context) {
         }
     }
 
-    suspend fun prefetch(articles: List<HomeArticle>) {
-        val urls = articles.asSequence().flatMap(::articleImageUrls).distinct().toList()
+    suspend fun prefetchFeedImages(articles: List<HomeArticle>) {
+        prefetchUrls(articles.asSequence().flatMap(::feedImageUrls).distinct().toList())
+    }
+
+    suspend fun prefetchArticleImages(article: HomeArticle) {
+        prefetchUrls(articleImageUrls(article).distinct().toList())
+    }
+
+    private suspend fun prefetchUrls(urls: List<String>) {
         if (urls.isEmpty()) return
         val permits = Semaphore(PREFETCH_CONCURRENCY)
         coroutineScope {
@@ -150,12 +160,17 @@ internal class HomeImageCache private constructor(context: Context) {
         private const val MAX_IMAGE_BYTES = 24L * 1024 * 1024
         private const val MAX_CACHE_BYTES = 192L * 1024 * 1024
         private const val PREFETCH_CONCURRENCY = 4
+        private const val CACHE_LOCK_STRIPES = 32
     }
 }
 
-internal fun articleImageUrls(article: HomeArticle): Sequence<String> = sequence {
+internal fun feedImageUrls(article: HomeArticle): Sequence<String> = sequence {
     if (isSafeHttpsUrl(article.sourceAvatarUrl)) yield(article.sourceAvatarUrl)
     if (isSafeHttpsUrl(article.coverUrl)) yield(article.coverUrl)
+}
+
+internal fun articleImageUrls(article: HomeArticle): Sequence<String> = sequence {
+    yieldAll(feedImageUrls(article))
     val document = Jsoup.parseBodyFragment(article.html, article.link)
     for (image in document.select("img")) {
         val raw = image.attr("src").ifBlank { image.attr("data-src") }

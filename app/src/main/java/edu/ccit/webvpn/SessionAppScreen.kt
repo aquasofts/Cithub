@@ -237,7 +237,7 @@ fun AuthenticatedApp(
             state = pagerState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             userScrollEnabled = false,
-            beyondViewportPageCount = 1,
+            beyondViewportPageCount = MainTab.entries.lastIndex,
         ) { page ->
             val tab = MainTab.entries[page]
             Box(Modifier.fillMaxSize().clipToBounds()) {

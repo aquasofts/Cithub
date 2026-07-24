@@ -13,7 +13,10 @@ object UpgradeHousekeeping {
     }
 
     fun run(context: Context) {
-        val appContext = context.applicationContext
+        runCatching { runSafely(context.applicationContext) }
+    }
+
+    private fun runSafely(appContext: Context) {
         val packageInfo = runCatching {
             @Suppress("DEPRECATION")
             appContext.packageManager.getPackageInfo(appContext.packageName, 0)
@@ -42,7 +45,9 @@ object UpgradeHousekeeping {
             val suffix = "$currentVersionCode-${System.currentTimeMillis()}"
             val stalePaths = buildList {
                 addAll(detachChildren(appContext.cacheDir, suffix))
-                detachDirectory(File(appContext.noBackupFilesDir, "home_feed_cache"), suffix)?.let(::add)
+                UpgradeNoBackupCacheDirectories.forEach { directoryName ->
+                    detachDirectory(File(appContext.noBackupFilesDir, directoryName), suffix)?.let(::add)
+                }
                 runCatching { detachDirectory(UpdateInstaller.updateDirectory(appContext), suffix) }
                     .getOrNull()
                     ?.let(::add)
@@ -54,27 +59,36 @@ object UpgradeHousekeeping {
     }
 
     private fun detachChildren(root: File, suffix: String): List<File> {
-        if (!root.isDirectory) return emptyList()
-        val canonicalRoot = root.canonicalFile
-        return root.listFiles().orEmpty().mapIndexedNotNull { index, child ->
-            val canonicalChild = runCatching { child.canonicalFile }.getOrNull()
-                ?: return@mapIndexedNotNull null
-            if (canonicalChild.path.startsWith(canonicalRoot.path + File.separator)) {
-                val stale = File(canonicalRoot, ".cithub-stale-$suffix-$index")
-                if (canonicalChild.renameTo(stale)) stale else null
-            } else null
-        }
+        return runCatching {
+            if (!root.isDirectory) return@runCatching emptyList()
+            val canonicalRoot = root.canonicalFile
+            root.listFiles().orEmpty().mapIndexedNotNull { index, child ->
+                val canonicalChild = runCatching { child.canonicalFile }.getOrNull()
+                    ?: return@mapIndexedNotNull null
+                if (canonicalChild.path.startsWith(canonicalRoot.path + File.separator)) {
+                    val stale = File(canonicalRoot, ".cithub-stale-$suffix-$index")
+                    if (canonicalChild.renameTo(stale)) stale else null
+                } else null
+            }
+        }.getOrDefault(emptyList())
     }
 
     private fun detachDirectory(directory: File, suffix: String): File? {
-        if (!directory.exists()) return null
-        val parent = directory.parentFile?.canonicalFile ?: return null
-        val canonicalDirectory = directory.canonicalFile
-        if (!canonicalDirectory.path.startsWith(parent.path + File.separator)) return null
-        val stale = File(parent, ".${directory.name}.cithub-stale-$suffix")
-        return stale.takeIf { canonicalDirectory.renameTo(it) }
+        return runCatching {
+            if (!directory.exists()) return@runCatching null
+            val parent = directory.parentFile?.canonicalFile ?: return@runCatching null
+            val canonicalDirectory = directory.canonicalFile
+            if (!canonicalDirectory.path.startsWith(parent.path + File.separator)) return@runCatching null
+            val stale = File(parent, ".${directory.name}.cithub-stale-$suffix")
+            stale.takeIf { canonicalDirectory.renameTo(it) }
+        }.getOrNull()
     }
 }
+
+internal val UpgradeNoBackupCacheDirectories = setOf(
+    "home_feed_cache",
+    "tieba_content_cache",
+)
 
 internal fun shouldCleanUpgradeCaches(
     previousVersionCode: Long?,

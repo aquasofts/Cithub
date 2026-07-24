@@ -99,6 +99,29 @@ class RssParserTest {
     }
 
     @Test
+    fun resolvesRelativeCampusNewsImagesAgainstTheFeedDocument() {
+        val feed = parse(
+            """
+                <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>
+                  <item><title>Campus news</title>
+                    <link>https://cit-news.pages.dev/posts/news-one/</link>
+                    <content:encoded>&lt;p&gt;Join&lt;img src=&quot;./assets/images/001.jpg&quot; /&gt;&lt;/p&gt;</content:encoded>
+                  </item>
+                </channel></rss>
+            """.trimIndent(),
+            source.copy(
+                url = "https://cit-news.pages.dev/rss.xml",
+                section = HomeSection.NEWS,
+                allowedArticleHosts = setOf("cit-news.pages.dev"),
+            ),
+        )
+
+        val article = feed.articles.single()
+        assertTrue(article.html.contains("src=\"https://cit-news.pages.dev/assets/images/001.jpg\""))
+        assertEquals("https://cit-news.pages.dev/assets/images/001.jpg", article.coverUrl)
+    }
+
+    @Test
     fun parsesAtomLinksRelativeMediaAndIsoDates() {
         val feed = parse(
             """

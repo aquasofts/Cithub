@@ -51,6 +51,7 @@ internal class HomeRepository(
     private val officialSources: List<OfficialNewsSource> = OfficialNewsSources.all,
     private val officialParser: OfficialNewsParser = OfficialNewsParser(),
     private val runtimeLog: RuntimeLog? = null,
+    private val cacheExpiryMillis: Long = DEFAULT_CACHE_EXPIRY_MILLIS,
 ) {
     suspend fun loadCached(section: HomeSection): List<HomeArticle> = withContext(Dispatchers.IO) {
         if (section == HomeSection.OFFICIAL) {
@@ -233,6 +234,7 @@ internal class HomeRepository(
     private suspend fun readCached(source: FeedSource): List<HomeArticle> = runCatching {
         val file = AtomicFile(cacheFile(source))
         if (!file.baseFile.isFile) return@runCatching emptyList()
+        if (file.baseFile.isExpired()) return@runCatching emptyList()
         if (file.baseFile.length() > MAX_RESPONSE_BYTES) return@runCatching emptyList()
         val xml = file.openRead().bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
         parser.parse(xml, source).articles
@@ -241,6 +243,7 @@ internal class HomeRepository(
     private fun readOfficialCache(source: OfficialNewsSource): List<HomeArticle> = runCatching {
         val file = AtomicFile(cacheFile(source))
         if (!file.baseFile.isFile) return@runCatching emptyList()
+        if (file.baseFile.isExpired()) return@runCatching emptyList()
         if (file.baseFile.length() > MAX_RESPONSE_BYTES) return@runCatching emptyList()
         val xml = file.openRead().bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
         officialParser.parseList(xml, source)
@@ -270,6 +273,11 @@ internal class HomeRepository(
     private fun cacheFile(source: FeedSource): File = File(cacheDirectory, "${source.id}.xml")
     private fun cacheFile(source: OfficialNewsSource): File = File(cacheDirectory, "${source.id}.xml")
 
+    private fun File.isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val writtenAt = lastModified()
+        return writtenAt <= 0L || writtenAt > nowMillis || nowMillis - writtenAt >= cacheExpiryMillis
+    }
+
     private data class SourceResult(
         val articles: List<HomeArticle>,
         val status: FeedSourceStatus,
@@ -277,6 +285,7 @@ internal class HomeRepository(
 
     companion object {
         private const val MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+        internal const val DEFAULT_CACHE_EXPIRY_MILLIS = 7L * 24L * 60L * 60L * 1000L
 
         fun create(
             context: Context,

@@ -82,7 +82,7 @@ internal class HomeViewModel(application: Application) : AndroidViewModel(applic
                         current.withPage(section, FeedPageState(articles = cached, initialLoading = false))
                     }
                 }
-                imageCache.prefetch(cached)
+                if (version == configurationVersion) imageCache.prefetchFeedImages(cached)
             }
         }
     }
@@ -105,6 +105,23 @@ internal class HomeViewModel(application: Application) : AndroidViewModel(applic
             )
         }
         refreshJobs[section] = viewModelScope.launch {
+            if (_uiState.value.page(section).articles.isEmpty()) {
+                val cached = repository.loadCached(section)
+                if (cached.isNotEmpty()) {
+                    _uiState.update { current ->
+                        val page = current.page(section)
+                        current.withPage(
+                            section,
+                            page.copy(
+                                articles = cached,
+                                initialLoading = false,
+                                refreshing = true,
+                            ),
+                        )
+                    }
+                    imageCache.prefetchFeedImages(cached)
+                }
+            }
             val result = repository.refresh(section)
             _uiState.update { current ->
                 val previous = current.page(section)
@@ -118,7 +135,7 @@ internal class HomeViewModel(application: Application) : AndroidViewModel(applic
                     ),
                 )
             }
-            imageCache.prefetch(result.articles)
+            imageCache.prefetchFeedImages(result.articles)
         }
     }
 
@@ -128,11 +145,15 @@ internal class HomeViewModel(application: Application) : AndroidViewModel(applic
         val reference = article.officialReference ?: return
         if (reference.detailLoaded) return
         detailJobs[id] = viewModelScope.launch {
-            runCatching { repository.loadOfficialDetail(article) }
-                .onSuccess { detailed ->
-                    _uiState.update { current -> current.replaceArticle(detailed) }
-                    imageCache.prefetch(listOf(detailed))
-                }
+            try {
+                runCatching { repository.loadOfficialDetail(article) }
+                    .onSuccess { detailed ->
+                        _uiState.update { current -> current.replaceArticle(detailed) }
+                        imageCache.prefetchArticleImages(detailed)
+                    }
+            } finally {
+                detailJobs.remove(id)
+            }
         }
     }
 

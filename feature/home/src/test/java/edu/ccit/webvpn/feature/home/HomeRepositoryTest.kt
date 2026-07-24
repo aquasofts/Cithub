@@ -53,6 +53,17 @@ class HomeRepositoryTest {
     }
 
     @Test
+    fun expiredFeedCacheIsNotDisplayed() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(feed("Old cached article")))
+        val repository = repository(listOf(source("expiring")))
+        repository.refresh(HomeSection.WECHAT)
+        val expiredAt = System.currentTimeMillis() - HomeRepository.DEFAULT_CACHE_EXPIRY_MILLIS
+        cacheDir.listFiles().orEmpty().forEach { assertTrue(it.setLastModified(expiredAt)) }
+
+        assertTrue(repository.loadCached(HomeSection.WECHAT).isEmpty())
+    }
+
+    @Test
     fun oneFailedSourceDoesNotHideSuccessfulSource() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200).setBody(feed("成功来源")))
         server.enqueue(MockResponse().setResponseCode(500))

@@ -87,9 +87,9 @@ internal class HomeFeedParser(
             .orEmpty()
         val document = Jsoup.parseBodyFragment(html)
         document.select("img").forEach { image ->
-            if (image.attr("src").isBlank()) {
-                image.attr("data-src").takeIf(String::isNotBlank)?.let { image.attr("src", it) }
-            }
+            val rawSource = image.attr("src").ifBlank { image.attr("data-src") }
+            val resolvedSource = resolveHttpsUrl(rawSource, source.url)
+            if (isSafeHttpsUrl(resolvedSource)) image.attr("src", resolvedSource) else image.removeAttr("src")
             image.removeAttr("data-src")
             image.removeAttr("loading")
         }
@@ -129,7 +129,7 @@ internal class HomeFeedParser(
             enclosureImage,
             extension?.mediaUrl,
         ).map(String?::orEmpty)
-            .map { resolveHttpsUrl(it, cleanLink) }
+            .map { resolveHttpsUrl(it, source.url) }
             .firstOrNull(::isSafeHttpsUrl)
             .orEmpty()
         val summaryText = plainText

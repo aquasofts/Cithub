@@ -201,6 +201,14 @@ class AppUpdateModelsTest {
     }
 
     @Test
+    fun upgradeHousekeepingClearsOnlyRebuildablePersistentCaches() {
+        assertEquals(
+            setOf("home_feed_cache", "tieba_content_cache"),
+            UpgradeNoBackupCacheDirectories,
+        )
+    }
+
+    @Test
     fun customUpdateUrlsRequireHttpsAndKeepApkNames() {
         assertEquals(
             "https://downloads.example/Cithub-2.2.2.apk?token=abc",

@@ -49,7 +49,9 @@ import edu.ccit.webvpn.feature.tieba.TiebaUploadedImage
 import edu.ccit.webvpn.feature.tieba.ThreadFloor
 import edu.ccit.webvpn.feature.tieba.ThreadPage
 import edu.ccit.webvpn.feature.tieba.data.AccountEntity
+import edu.ccit.webvpn.feature.tieba.data.CachedTiebaContent
 import edu.ccit.webvpn.feature.tieba.data.TiebaClientConfig
+import edu.ccit.webvpn.feature.tieba.data.TiebaContentCache
 import edu.ccit.webvpn.feature.tieba.data.TiebaSettingsRepository
 import edu.ccit.webvpn.feature.tieba.forumDisplayName
 import edu.ccit.webvpn.feature.tieba.normalizeTiebaEmoticonId
@@ -252,6 +254,10 @@ class TiebaNetworkRepository internal constructor(
     private val picPageRequests: TiebaPicPageRequestFactory,
     private val gson: Gson,
     private val settings: TiebaSettingsRepository,
+    private val contentCache: TiebaContentCache = TiebaContentCache(
+        File(context.noBackupFilesDir, "tieba_content_cache"),
+        gson,
+    ),
     private val signDiagnostics: TiebaSignDiagnostics = TiebaSignDiagnostics.get(context),
     private val officialClientFactory: (AccountEntity?, TiebaClientConfig) -> TiebaOfficialClient = { account, config ->
         TiebaOfficialClient(context, gson, account, config)
@@ -272,6 +278,54 @@ class TiebaNetworkRepository internal constructor(
 ) {
     private val identity = TiebaClientIdentity(context)
     private val runtimeLog = RuntimeLog.get(context)
+
+    internal suspend fun loadCachedForum(
+        sort: ForumSort,
+        goodOnly: Boolean,
+        forumName: String,
+    ): CachedTiebaContent<ForumPage>? = contentCache.readForum(forumName, sort, goodOnly)
+
+    internal suspend fun cacheForum(
+        sort: ForumSort,
+        goodOnly: Boolean,
+        forumName: String,
+        page: ForumPage,
+    ) = contentCache.writeForum(forumName, sort, goodOnly, page)
+
+    internal suspend fun loadCachedThread(
+        threadId: String,
+        sort: FloorSort,
+        onlyOriginalPoster: Boolean,
+        forumId: Long,
+        forumName: String,
+        focusPostId: String?,
+    ): CachedTiebaContent<ThreadPage>? = contentCache.readThread(
+        threadId,
+        sort,
+        onlyOriginalPoster,
+        forumId,
+        forumName,
+        focusPostId,
+    )
+
+    internal suspend fun cacheThread(
+        threadId: String,
+        sort: FloorSort,
+        onlyOriginalPoster: Boolean,
+        forumId: Long,
+        forumName: String,
+        focusPostId: String?,
+        page: ThreadPage,
+    ) = contentCache.writeThread(
+        threadId,
+        sort,
+        onlyOriginalPoster,
+        forumId,
+        forumName,
+        focusPostId,
+        page,
+    )
+
     /** Mirrors TiebaLite's photo-view initialization and returns a fresh, signed original URL. */
     suspend fun resolveOriginalImage(
         data: LoadPicPageData,

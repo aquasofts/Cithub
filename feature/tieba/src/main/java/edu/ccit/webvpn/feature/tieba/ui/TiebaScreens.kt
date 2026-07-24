@@ -184,6 +184,7 @@ import edu.ccit.webvpn.feature.tieba.TiebaRuntime
 import edu.ccit.webvpn.feature.tieba.TiebaUserPost
 import edu.ccit.webvpn.feature.tieba.TiebaUserProfile
 import edu.ccit.webvpn.feature.tieba.ThreadFloor
+import edu.ccit.webvpn.feature.tieba.data.shouldRefreshTiebaContent
 import edu.ccit.webvpn.feature.tieba.forumDisplayName
 import edu.ccit.webvpn.feature.tieba.normalizeForumName
 import edu.ccit.webvpn.feature.tieba.normalizeTiebaEmoticonId
@@ -214,6 +215,9 @@ private data class ThreadRoute(
     val forumName: String,
     val postId: Long = 0,
 ) : NavKey
+
+private val ThreadRoute.screenStateKey: String
+    get() = "$id:${postId.takeIf { it > 0 }?.toString().orEmpty()}"
 
 @Serializable
 private data class FloorRepliesRoute(
@@ -259,6 +263,7 @@ private class ForumScreenState {
     var error by mutableStateOf<String?>(null)
     var queryKey by mutableStateOf<String?>(null)
     var attemptedQueryKey by mutableStateOf<String?>(null)
+    var cacheCheckedQueryKey by mutableStateOf<String?>(null)
     val listState = LazyListState()
 }
 
@@ -312,6 +317,8 @@ private class ThreadScreenState(initialTitle: String) {
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var queryKey by mutableStateOf<String?>(null)
+    var cacheCheckedQueryKey by mutableStateOf<String?>(null)
+    var lastRefreshedAtMillis by mutableStateOf(0L)
     val listState = LazyListState()
 }
 
@@ -361,16 +368,27 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
         if (backStack.lastOrNull() != route) backStack.add(route)
     }
 
+    fun popCurrentRoute() {
+        when (val route = backStack.lastOrNull()) {
+            is ThreadRoute -> threadStates.remove(route.screenStateKey)
+            is FloorRepliesRoute -> floorRepliesStates.remove("${route.threadId}:${route.postId}")
+            is ProfileRoute -> profileStates.remove(route.uid)
+            ImageRoute -> photoViewData = null
+            else -> Unit
+        }
+        backStack.removeLastOrNull()
+    }
+
     fun openThread(thread: ForumThread, focusPostId: Long = 0) {
-        navigateSingleTop(
-            ThreadRoute(
-                id = thread.id,
-                title = thread.title,
-                forumId = thread.forumId,
-                forumName = thread.forumName,
-                postId = focusPostId,
-            ),
+        val route = ThreadRoute(
+            id = thread.id,
+            title = thread.title,
+            forumId = thread.forumId,
+            forumName = thread.forumName,
+            postId = focusPostId,
         )
+        threadStates.remove(route.screenStateKey)
+        navigateSingleTop(route)
     }
 
     fun openProfile(uid: Long) {
@@ -391,7 +409,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
 
     NavDisplay(
         backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
+        onBack = ::popCurrentRoute,
         modifier = modifier.fillMaxSize(),
         transitionSpec = { ccitForwardNavigationTransition(reduceMotion) },
         popTransitionSpec = { ccitBackwardNavigationTransition(reduceMotion) },
@@ -413,7 +431,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 runtime = runtime,
                 state = forumRuleState,
                 forumId = forumState.forum.id.toLongOrNull() ?: 0,
-                onBack = { backStack.removeLastOrNull() },
+                onBack = ::popCurrentRoute,
             )
         }
         entry<SearchRoute> {
@@ -421,7 +439,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 runtime = runtime,
                 state = searchState,
                 currentForum = forumState.forum,
-                onBack = { backStack.removeLastOrNull() },
+                onBack = ::popCurrentRoute,
                 onThread = ::openThread,
             ) { openProfile(it.authorId) }
         }
@@ -430,7 +448,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
             val forumName = route.forumName.ifBlank { edu.ccit.webvpn.feature.tieba.TARGET_FORUM_NAME }
             val threadId = route.id
             val focusPostId = route.postId.takeIf { it > 0 }?.toString()
-            val screenState = threadStates.getOrPut("$threadId:${focusPostId.orEmpty()}") {
+            val screenState = threadStates.getOrPut(route.screenStateKey) {
                 ThreadScreenState(route.title)
             }
             ThreadScreen(
@@ -440,7 +458,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 forumId = forumId,
                 forumName = forumName,
                 focusPostId = focusPostId,
-                onBack = { backStack.removeLastOrNull() },
+                onBack = ::popCurrentRoute,
                 onImage = { data ->
                     photoViewData = data
                     navigateSingleTop(ImageRoute)
@@ -451,7 +469,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                     navigateSingleTop(
                         FloorRepliesRoute(
                             threadId = route.id,
-                            postId = floor.postId.toString(),
+                            postId = floor.postId,
                             forumId = forumId,
                             forumName = forumName,
                         ),
@@ -471,7 +489,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 postId = postId,
                 forumId = route.forumId,
                 forumName = route.forumName,
-                onBack = { backStack.removeLastOrNull() },
+                onBack = ::popCurrentRoute,
                 onImage = { data -> photoViewData = data; navigateSingleTop(ImageRoute) },
                 onProfile = ::openProfile,
                 onReply = ::openReply,
@@ -483,7 +501,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
                 runtime = runtime,
                 state = profileStates.getOrPut(uid) { UserProfileScreenState() },
                 uid = uid,
-                onBack = { backStack.removeLastOrNull() },
+                onBack = ::popCurrentRoute,
                 onThread = { post ->
                     openThread(
                         ForumThread(
@@ -500,9 +518,9 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
         entry<ImageRoute> {
             val data = photoViewData
             if (data == null || data.picItems.isEmpty()) {
-                LaunchedEffect(Unit) { backStack.removeLastOrNull() }
+                LaunchedEffect(Unit) { popCurrentRoute() }
             } else {
-                FullImageScreen(runtime, data) { backStack.removeLastOrNull() }
+                FullImageScreen(runtime, data, ::popCurrentRoute)
             }
         }
         },
@@ -578,6 +596,14 @@ private fun ForumScreen(
                         previousThreadCount = previousThreads.size,
                         mergedThreadCount = mergedThreads.size,
                     )
+                    if (!append && targetPage == 1) {
+                        runtime.network.cacheForum(
+                            preferences.reading.forumSort,
+                            state.goodOnly,
+                            homeForumName,
+                            result,
+                        )
+                    }
                 }
             } catch (cancellation: CancellationException) {
                 throw cancellation
@@ -594,8 +620,6 @@ private fun ForumScreen(
         homeForumName,
         state.goodOnly,
         preferences.reading.forumSort,
-        state.loading,
-        state.refreshing,
     ) {
         if (!active) return@LaunchedEffect
         val queryKey = "$homeForumName:${state.goodOnly}:${preferences.reading.forumSort}"
@@ -606,7 +630,23 @@ private fun ForumScreen(
             state.page = 1
             state.hasMore = false
             state.attemptedQueryKey = null
+            state.cacheCheckedQueryKey = null
             state.queryKey = queryKey
+        }
+        if (state.cacheCheckedQueryKey != queryKey) {
+            val cached = runtime.network.loadCachedForum(
+                preferences.reading.forumSort,
+                state.goodOnly,
+                homeForumName,
+            )
+            if (state.queryKey == queryKey && state.threads.isEmpty() && cached != null) {
+                state.threads = cached.value.threads
+                state.forum = cached.value.forum
+                state.page = cached.value.page
+                state.hasMore = cached.value.hasMore && cached.value.threads.isNotEmpty()
+                state.error = null
+            }
+            state.cacheCheckedQueryKey = queryKey
         }
         if (!state.loading && !state.refreshing && state.attemptedQueryKey != queryKey) {
             load(1, false)
@@ -1060,6 +1100,18 @@ private fun ThreadScreen(
                 state.totalPages = loaded.totalPages
                 state.replyCount = loaded.replyCount
                 state.page = targetPage
+                if (!append && targetPage == 1) {
+                    state.lastRefreshedAtMillis = System.currentTimeMillis()
+                    runtime.network.cacheThread(
+                        threadId,
+                        preferences.reading.floorSort,
+                        preferences.reading.onlyOriginalPoster,
+                        forumId,
+                        forumName,
+                        focusPostId,
+                        loaded,
+                    )
+                }
             }.onFailure { state.error = it.message ?: "帖子加载失败" }
             state.loading = false
         }
@@ -1069,13 +1121,44 @@ private fun ThreadScreen(
     LaunchedEffect(queryKey, refreshKey) {
         if (state.queryKey != queryKey) {
             state.queryKey = queryKey
+            state.cacheCheckedQueryKey = null
+            state.lastRefreshedAtMillis = 0L
             state.page = 0
             state.totalPages = 1
             state.body = null
             state.floors = emptyList()
             state.listState.scrollToItem(0)
         }
-        if (state.page == 0 || refreshKey > 0) loadPage(1, false)
+        if (state.cacheCheckedQueryKey != queryKey) {
+            val cached = runtime.network.loadCachedThread(
+                threadId,
+                preferences.reading.floorSort,
+                preferences.reading.onlyOriginalPoster,
+                forumId,
+                forumName,
+                focusPostId,
+            )
+            if (state.queryKey == queryKey && state.page == 0 && cached != null) {
+                state.title = cached.value.title
+                state.body = cached.value.body
+                state.floors = cached.value.floors
+                state.totalPages = cached.value.totalPages
+                state.replyCount = cached.value.replyCount
+                state.page = cached.value.page
+                state.lastRefreshedAtMillis = cached.savedAtMillis
+                state.error = null
+            }
+            state.cacheCheckedQueryKey = queryKey
+        }
+        val forceRefresh = refreshKey > 0
+        if (forceRefresh) refreshKey = 0
+        if (
+            state.page == 0 ||
+            forceRefresh ||
+            shouldRefreshTiebaContent(state.lastRefreshedAtMillis)
+        ) {
+            loadPage(1, false)
+        }
     }
 
     val shouldLoadMore by remember {

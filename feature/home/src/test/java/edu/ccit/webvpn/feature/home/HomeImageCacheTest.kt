@@ -31,6 +31,13 @@ class HomeImageCacheTest {
             ),
             articleImageUrls(article).toList(),
         )
+        assertEquals(
+            listOf(
+                "https://cdn.example/avatar.png",
+                "https://cdn.example/cover.jpg",
+            ),
+            feedImageUrls(article).toList(),
+        )
     }
 
     @Test

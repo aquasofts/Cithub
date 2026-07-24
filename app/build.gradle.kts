@@ -38,8 +38,8 @@ android {
         applicationId = "edu.ccit.webvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = ciVersionCode ?: 49
-        versionName = ciVersionName ?: "2.2.6"
+        versionCode = ciVersionCode ?: 52
+        versionName = ciVersionName ?: "2.2.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
