@@ -5,11 +5,16 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.9`
-- Version code: `52`
+- Version name: `2.2.10`
+- Version code: `53`
 - Updated: 2026-07-24
 
 ## Changes
+
+### 2.2.10 (versionCode 53) — 2026-07-24
+
+- Made every new Tieba thread visit start at the original post instead of reusing a prior comment-area scroll position, while preserving the reading position when returning from images, profiles, or floor replies.
+- Reapplied the one-time top reset after cached or network thread content is attached so asynchronous loading cannot restore a stale offset.
 
 ### 2.2.9 (versionCode 52) — 2026-07-24
 

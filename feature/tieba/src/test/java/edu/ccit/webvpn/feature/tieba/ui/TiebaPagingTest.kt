@@ -1,10 +1,19 @@
 package edu.ccit.webvpn.feature.tieba.ui
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TiebaPagingTest {
+    @Test
+    fun separateThreadVisitsNeverReuseTransientScrollState() {
+        val firstVisit = threadScreenStateKey(threadId = "123", postId = 0, visitId = 1)
+        val secondVisit = threadScreenStateKey(threadId = "123", postId = 0, visitId = 2)
+
+        assertNotEquals(firstVisit, secondVisit)
+    }
+
     @Test
     fun initialPageContinuesOnlyWhenItContainsVisibleThreads() {
         assertTrue(

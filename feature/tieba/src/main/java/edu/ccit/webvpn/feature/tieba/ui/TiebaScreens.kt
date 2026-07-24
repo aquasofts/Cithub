@@ -122,6 +122,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -214,10 +215,14 @@ private data class ThreadRoute(
     val forumId: Long,
     val forumName: String,
     val postId: Long = 0,
+    val visitId: Long = 0,
 ) : NavKey
 
 private val ThreadRoute.screenStateKey: String
-    get() = "$id:${postId.takeIf { it > 0 }?.toString().orEmpty()}"
+    get() = threadScreenStateKey(id, postId, visitId)
+
+internal fun threadScreenStateKey(threadId: String, postId: Long, visitId: Long): String =
+    "$threadId:${postId.takeIf { it > 0 }?.toString().orEmpty()}:$visitId"
 
 @Serializable
 private data class FloorRepliesRoute(
@@ -319,6 +324,7 @@ private class ThreadScreenState(initialTitle: String) {
     var queryKey by mutableStateOf<String?>(null)
     var cacheCheckedQueryKey by mutableStateOf<String?>(null)
     var lastRefreshedAtMillis by mutableStateOf(0L)
+    var initialTopResetPending = true
     val listState = LazyListState()
 }
 
@@ -363,6 +369,7 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     val floorRepliesStates = remember { mutableMapOf<String, FloorRepliesScreenState>() }
     val profileStates = remember { mutableMapOf<Long, UserProfileScreenState>() }
     val forumRuleState = remember { ForumRuleScreenState() }
+    var nextThreadVisitId by rememberSaveable { mutableLongStateOf(0L) }
 
     fun navigateSingleTop(route: NavKey) {
         if (backStack.lastOrNull() != route) backStack.add(route)
@@ -380,14 +387,15 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     }
 
     fun openThread(thread: ForumThread, focusPostId: Long = 0) {
+        nextThreadVisitId++
         val route = ThreadRoute(
             id = thread.id,
             title = thread.title,
             forumId = thread.forumId,
             forumName = thread.forumName,
             postId = focusPostId,
+            visitId = nextThreadVisitId,
         )
-        threadStates.remove(route.screenStateKey)
         navigateSingleTop(route)
     }
 
@@ -1100,6 +1108,10 @@ private fun ThreadScreen(
                 state.totalPages = loaded.totalPages
                 state.replyCount = loaded.replyCount
                 state.page = targetPage
+                if (!append && state.initialTopResetPending) {
+                    state.listState.scrollToItem(0)
+                    state.initialTopResetPending = false
+                }
                 if (!append && targetPage == 1) {
                     state.lastRefreshedAtMillis = System.currentTimeMillis()
                     runtime.network.cacheThread(
@@ -1123,6 +1135,7 @@ private fun ThreadScreen(
             state.queryKey = queryKey
             state.cacheCheckedQueryKey = null
             state.lastRefreshedAtMillis = 0L
+            state.initialTopResetPending = true
             state.page = 0
             state.totalPages = 1
             state.body = null
@@ -1147,6 +1160,10 @@ private fun ThreadScreen(
                 state.page = cached.value.page
                 state.lastRefreshedAtMillis = cached.savedAtMillis
                 state.error = null
+                if (state.initialTopResetPending) {
+                    state.listState.scrollToItem(0)
+                    state.initialTopResetPending = false
+                }
             }
             state.cacheCheckedQueryKey = queryKey
         }
