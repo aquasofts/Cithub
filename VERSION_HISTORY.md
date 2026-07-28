@@ -5,11 +5,15 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.10`
-- Version code: `53`
-- Updated: 2026-07-24
+- Version name: `2.2.11`
+- Version code: `54`
+- Updated: 2026-07-28
 
 ## Changes
+
+### 2.2.11 (versionCode 54) — 2026-07-28
+
+- Fixed returning from the Tieba original-image viewer so it restores the thread or floor-reply page instead of popping again to the forum home.
 
 ### 2.2.10 (versionCode 53) — 2026-07-24
 

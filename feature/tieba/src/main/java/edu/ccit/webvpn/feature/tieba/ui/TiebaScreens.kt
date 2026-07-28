@@ -224,6 +224,16 @@ private val ThreadRoute.screenStateKey: String
 internal fun threadScreenStateKey(threadId: String, postId: Long, visitId: Long): String =
     "$threadId:${postId.takeIf { it > 0 }?.toString().orEmpty()}:$visitId"
 
+internal fun <T> popExpectedRoute(
+    currentRoute: T?,
+    expectedRoute: T,
+    pop: () -> Unit,
+): Boolean {
+    if (currentRoute != expectedRoute) return false
+    pop()
+    return true
+}
+
 @Serializable
 private data class FloorRepliesRoute(
     val threadId: String,
@@ -376,11 +386,13 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
     }
 
     fun popCurrentRoute() {
+        // ImageRoute deliberately has no cleanup branch. Its entry remains composed during the pop
+        // transition, so clearing the lightweight handoff here could trigger missing-state recovery
+        // and a second pop of the underlying thread. The next opened image replaces the old data.
         when (val route = backStack.lastOrNull()) {
             is ThreadRoute -> threadStates.remove(route.screenStateKey)
             is FloorRepliesRoute -> floorRepliesStates.remove("${route.threadId}:${route.postId}")
             is ProfileRoute -> profileStates.remove(route.uid)
-            ImageRoute -> photoViewData = null
             else -> Unit
         }
         backStack.removeLastOrNull()
@@ -526,7 +538,9 @@ fun TiebaRootScreen(active: Boolean, modifier: Modifier = Modifier) {
         entry<ImageRoute> {
             val data = photoViewData
             if (data == null || data.picItems.isEmpty()) {
-                LaunchedEffect(Unit) { popCurrentRoute() }
+                LaunchedEffect(Unit) {
+                    popExpectedRoute(backStack.lastOrNull(), ImageRoute, ::popCurrentRoute)
+                }
             } else {
                 FullImageScreen(runtime, data, ::popCurrentRoute)
             }

@@ -1,11 +1,22 @@
 package edu.ccit.webvpn.feature.tieba.ui
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TiebaPagingTest {
+    @Test
+    fun missingImageRecoveryNeverPopsTheUnderlyingThread() {
+        var popCount = 0
+
+        assertFalse(popExpectedRoute("thread", "image") { popCount++ })
+        assertEquals(0, popCount)
+        assertTrue(popExpectedRoute("image", "image") { popCount++ })
+        assertEquals(1, popCount)
+    }
+
     @Test
     fun separateThreadVisitsNeverReuseTransientScrollState() {
         val firstVisit = threadScreenStateKey(threadId = "123", postId = 0, visitId = 1)
