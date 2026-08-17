@@ -28,6 +28,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -2045,6 +2048,7 @@ private suspend fun resolveTiebaImageUrl(runtime: TiebaRuntime, item: PicItem): 
 private fun ImageSaveContextMenu(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    onDoubleClick: (() -> Unit)? = null,
     onSave: () -> Unit,
     saveEnabled: Boolean = true,
     content: @Composable () -> Unit,
@@ -2062,6 +2066,7 @@ private fun ImageSaveContextMenu(
             interactionSource = interactionSource,
             indication = null,
             onClick = onClick,
+            onDoubleClick = onDoubleClick,
             onLongClickLabel = "图片操作",
             onLongClick = { if (saveEnabled) expanded = true },
         ),
@@ -2579,6 +2584,9 @@ private fun FullImagePage(
     var loading by remember(item.picId, retry) { mutableStateOf(false) }
     var failed by remember(item.picId, retry) { mutableStateOf(false) }
     val context = LocalContext.current
+    val reduceMotion = LocalReduceMotion.current
+    val scope = rememberCoroutineScope()
+    var zoomAnimation by remember(item.picId) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     LaunchedEffect(item.picId, retry) {
         resolving = true
         loading = false
@@ -2603,6 +2611,7 @@ private fun FullImagePage(
     }
     val saveAction = rememberTiebaImageSaveAction(runtime, item, resolvedUrl)
     val transform = rememberTransformableState { _, zoom, pan, _ ->
+        zoomAnimation?.cancel()
         scale = (scale * zoom).coerceIn(1f, 6f)
         onScaleChange(scale)
         if (scale == 1f) {
@@ -2613,6 +2622,30 @@ private fun FullImagePage(
             offsetY += pan.y
         }
     }
+    val toggleZoom: () -> Unit = {
+        zoomAnimation?.cancel()
+        val startScale = scale
+        val startOffsetX = offsetX
+        val startOffsetY = offsetY
+        val targetScale = if (scale > 1.01f) 1f else DOUBLE_CLICK_IMAGE_SCALE
+        val applyProgress: (Float) -> Unit = { progress ->
+            scale = startScale + (targetScale - startScale) * progress
+            offsetX = startOffsetX * (1f - progress)
+            offsetY = startOffsetY * (1f - progress)
+            onScaleChange(scale)
+        }
+        if (reduceMotion) {
+            applyProgress(1f)
+        } else {
+            zoomAnimation = scope.launch {
+                animate(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = tween(IMAGE_DOUBLE_CLICK_ANIMATION_MILLIS, easing = FastOutSlowInEasing),
+                ) { progress, _ -> applyProgress(progress) }
+            }
+        }
+    }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         request?.let { originalRequest ->
             ImageSaveContextMenu(
@@ -2621,6 +2654,7 @@ private fun FullImagePage(
                     canPan = { shouldConsumeImagePan(scale) },
                 ),
                 onClick = {},
+                onDoubleClick = toggleZoom,
                 onSave = saveAction.save,
                 saveEnabled = resolvedUrl != null && !failed && !saveAction.saving,
             ) {
@@ -2686,6 +2720,9 @@ private fun FullImagePage(
 }
 
 internal fun shouldConsumeImagePan(scale: Float): Boolean = scale > 1.01f
+
+private const val IMAGE_DOUBLE_CLICK_ANIMATION_MILLIS = 180
+private const val DOUBLE_CLICK_IMAGE_SCALE = 2.5f
 
 @Composable
 fun TiebaAccountCard(onLogin: () -> Unit, modifier: Modifier = Modifier) {

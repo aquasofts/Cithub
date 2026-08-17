@@ -22,6 +22,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -641,6 +642,7 @@ private fun rememberHomeImageSaveAction(url: String?): HomeImageSaveAction {
 @Composable
 private fun HomeImageSaveContextMenu(
     modifier: Modifier = Modifier,
+    onDoubleClick: () -> Unit,
     onSave: () -> Unit,
     saveEnabled: Boolean,
     content: @Composable () -> Unit,
@@ -658,6 +660,7 @@ private fun HomeImageSaveContextMenu(
             interactionSource = interactionSource,
             indication = null,
             onClick = {},
+            onDoubleClick = onDoubleClick,
             onLongClickLabel = "图片操作",
             onLongClick = { if (saveEnabled) expanded = true },
         ),
@@ -696,6 +699,9 @@ private fun FullArticleImageScreen(url: String, onBack: () -> Unit) {
     var offsetX by remember(url) { mutableFloatStateOf(0f) }
     var offsetY by remember(url) { mutableFloatStateOf(0f) }
     val saveAction = rememberHomeImageSaveAction(url)
+    val reduceMotion = LocalReduceMotion.current
+    val scope = rememberCoroutineScope()
+    var zoomAnimation by remember(url) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     LaunchedEffect(url, retry) {
         loading = true
@@ -714,6 +720,7 @@ private fun FullArticleImageScreen(url: String, onBack: () -> Unit) {
         }
     }
     val transform = rememberTransformableState { _, zoom, pan, _ ->
+        zoomAnimation?.cancel()
         scale = (scale * zoom).coerceIn(1f, 6f)
         if (scale == 1f) {
             offsetX = 0f
@@ -723,10 +730,34 @@ private fun FullArticleImageScreen(url: String, onBack: () -> Unit) {
             offsetY += pan.y
         }
     }
+    val toggleZoom: () -> Unit = {
+        zoomAnimation?.cancel()
+        val startScale = scale
+        val startOffsetX = offsetX
+        val startOffsetY = offsetY
+        val targetScale = if (scale > 1.01f) 1f else DOUBLE_CLICK_IMAGE_SCALE
+        val applyProgress: (Float) -> Unit = { progress ->
+            scale = startScale + (targetScale - startScale) * progress
+            offsetX = startOffsetX * (1f - progress)
+            offsetY = startOffsetY * (1f - progress)
+        }
+        if (reduceMotion) {
+            applyProgress(1f)
+        } else {
+            zoomAnimation = scope.launch {
+                animate(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = tween(IMAGE_DOUBLE_CLICK_ANIMATION_MILLIS, easing = FastOutSlowInEasing),
+                ) { progress, _ -> applyProgress(progress) }
+            }
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         HomeImageSaveContextMenu(
             modifier = Modifier.fillMaxSize().transformable(transform),
+            onDoubleClick = toggleZoom,
             onSave = saveAction.save,
             saveEnabled = !failed && !saveAction.saving,
         ) {
@@ -1284,6 +1315,8 @@ private fun SmoothNetworkImage(
 
 private const val ORIGINAL_LOAD_TIMEOUT_MILLIS = 30_000L
 private const val IMAGE_CROSSFADE_MILLIS = 180
+private const val IMAGE_DOUBLE_CLICK_ANIMATION_MILLIS = 180
+private const val DOUBLE_CLICK_IMAGE_SCALE = 2.5f
 private const val OFFICIAL_COVER_PREFETCH_COUNT = 20
 
 internal fun officialCoverUrlsToPrefetch(

@@ -5,11 +5,15 @@ This file is the canonical record of the app version. Keep it synchronized with 
 
 ## Current version
 
-- Version name: `2.2.11`
-- Version code: `54`
-- Updated: 2026-07-28
+- Version name: `2.2.12`
+- Version code: `55`
+- Updated: 2026-08-17
 
 ## Changes
+
+### 2.2.12 (versionCode 55) — 2026-08-17
+
+- Added double-tap zoom and double-tap reset to full-screen images across WeChat, campus-news, official-news, and Tieba sections while preserving pinch zoom, panning, paging, and long-press saving.
 
 ### 2.2.11 (versionCode 54) — 2026-07-28
 
